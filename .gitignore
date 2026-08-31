@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# Go 构建产物 / 覆盖率
+*.class
+/dist/
+*.out
+coverage.txt

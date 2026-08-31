@@ -1,0 +1,107 @@
+{
+  "_meta.title": "六请求头 golden 样例(X-SIGNATURE / Authorization / X-RISK-BASIC 等)",
+  "_meta.generator": "scripts/GenVectors.java(JDK11 + bcprov-jdk15on 1.70,确定性可重跑)",
+  "_meta.notes": [
+    "六个头见 RiskSimpleClient.buildHeaders(L298-L307):Content-Type/X-RISK-MODE/X-SIGNATURE/Authorization/X-RISK-BASIC/X-User-Id",
+    "X-SIGNATURE = 标准 Base64( ECIES(staticPub, 小写hex(sha512(升序JSON))) ):被加密的是 128 个 ASCII hex 字符本身",
+    "Authorization = \"Basic \" + Base64UrlWithPadding(clientId + ':' + clientSecret);这不是标准 Basic 的字母表(+/ 被换成 -_),【带填充 =】",
+    "X-RISK-BASIC = Base64UrlWithPadding(headerJson),URL-safe 同样带填充",
+    "X-User-Id:risk 场景来自 basicParam.getUserId()(缺省 UNKNOWN);案件查询硬编码 UNKNOWN",
+    "三条样例分别覆盖:案件查询 7 键签名 / 同步问询含密文 19 键签名 / 非 ASCII bizId"
+  ],
+  "entries": [
+    {
+      "name": "audit_case_query_a_kyc_general_case",
+      "scenario": "queryAuditCase: POST {baseUrl}/generalCase/query(无路径参数)",
+      "clientId": "test-client-id",
+      "clientSecret": "test-client-secret",
+      "clientVersion": "1.0.7",
+      "signInputs": {
+        "sortedSignJson": "{\"bizId\":\"GB20260827093000001\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyc_general_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272000000,\"traceId\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"}",
+        "sha512HexLowerOfSignJson": "a63df79aa9f7b3ac59891d8a0c08fa2bab06c8f2affbdb21fb6cc4a15984e52a06c9f51c0addca73b4a941c52f10f6fa0e192cff34d51c2f0d7d210a3e50af5d",
+        "eciesPlaintextNote": "被 ECIES 加密的明文是这 128 个小写 hex 字符本身(US-ASCII)",
+        "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LDYBd4B3I1gV693wUmMw1OyYxXPtQMi4upGJJLUDg2VYSGdjEJxa0ZQrNwBu1HDfI9svCEqbZhbsLf1qIAsjjs+4YdZiAQKqQ6jVWRI4bjxfcU7+cSRk9RxKxcn3EtTXShf66vT5sILTsn3qlJggcbLKM5T8chYHASuq4FzfPzvYY9uy+pRe/zDzVFUoNmQhtOPyqn"
+      },
+      "authorizationScheme": "Basic",
+      "authorizationBase64url": "dGVzdC1jbGllbnQtaWQ6dGVzdC1jbGllbnQtc2VjcmV0",
+      "riskBasicBase64url": "eyJiaXpJZCI6IkdCMjAyNjA4MjcwOTMwMDAwMDEiLCJ1c2VySWQiOiJVTktOT1dOIiwiZXZlbnRUeXBlIjoia3ljX2dlbmVyYWxfY2FzZSIsInRlbmFudElkIjoiZGVmYXVsdCIsInNpdGVUeXBlIjoiZGVmYXVsdCIsInRyYWNlSWQiOiIzZmE4NWY2NC01NzE3LTQ1NjItYjNmYy0yYzk2M2Y2NmFmYTYiLCJyZXF1ZXN0SXAiOiIxOTIuMTY4LjEuMTAwIiwicmVxdWVzdFRpbWUiOjE3NTYyNzIwMDAwMDAsImNsaWVudFZlcnNpb24iOiIxLjAuNyIsImNsaWVudElkIjoidGVzdC1jbGllbnQtaWQifQ==",
+      "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LDYBd4B3I1gV693wUmMw1OyYxXPtQMi4upGJJLUDg2VYSGdjEJxa0ZQrNwBu1HDfI9svCEqbZhbsLf1qIAsjjs+4YdZiAQKqQ6jVWRI4bjxfcU7+cSRk9RxKxcn3EtTXShf66vT5sILTsn3qlJggcbLKM5T8chYHASuq4FzfPzvYY9uy+pRe/zDzVFUoNmQhtOPyqn",
+      "headerJson": "{\"bizId\":\"GB20260827093000001\",\"userId\":\"UNKNOWN\",\"eventType\":\"kyc_general_case\",\"tenantId\":\"default\",\"siteType\":\"default\",\"traceId\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272000000,\"clientVersion\":\"1.0.7\",\"clientId\":\"test-client-id\"}",
+      "bodyJson": "{\"bizId\":\"GB20260827093000001\",\"eventType\":\"kyc_general_case\"}",
+      "headerJsonNote": "hutool BeanUtil.copyProperties(requestMap, RiskRequestHeader.class) 再经 Jackson 序列化的确切字符串: 父类字段在前子类字段在后、各按声明顺序,null 被省略;userId 是 bean 默认值 UNKNOWN(requestMap 没有 userId)",
+      "noteAboutSignatureScope": "X-SIGNATURE 只覆盖 sortedSignJson(TreeMap 升序 7 键),不含 headerJson/body 的其余键集合",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-RISK-MODE": "sync",
+        "X-SIGNATURE": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LDYBd4B3I1gV693wUmMw1OyYxXPtQMi4upGJJLUDg2VYSGdjEJxa0ZQrNwBu1HDfI9svCEqbZhbsLf1qIAsjjs+4YdZiAQKqQ6jVWRI4bjxfcU7+cSRk9RxKxcn3EtTXShf66vT5sILTsn3qlJggcbLKM5T8chYHASuq4FzfPzvYY9uy+pRe/zDzVFUoNmQhtOPyqn",
+        "Authorization": "Basic dGVzdC1jbGllbnQtaWQ6dGVzdC1jbGllbnQtc2VjcmV0",
+        "X-RISK-BASIC": "eyJiaXpJZCI6IkdCMjAyNjA4MjcwOTMwMDAwMDEiLCJ1c2VySWQiOiJVTktOT1dOIiwiZXZlbnRUeXBlIjoia3ljX2dlbmVyYWxfY2FzZSIsInRlbmFudElkIjoiZGVmYXVsdCIsInNpdGVUeXBlIjoiZGVmYXVsdCIsInRyYWNlSWQiOiIzZmE4NWY2NC01NzE3LTQ1NjItYjNmYy0yYzk2M2Y2NmFmYTYiLCJyZXF1ZXN0SXAiOiIxOTIuMTY4LjEuMTAwIiwicmVxdWVzdFRpbWUiOjE3NTYyNzIwMDAwMDAsImNsaWVudFZlcnNpb24iOiIxLjAuNyIsImNsaWVudElkIjoidGVzdC1jbGllbnQtaWQifQ==",
+        "X-User-Id": "UNKNOWN"
+      }
+    },
+    {
+      "name": "sync_risk_with_secret_field_encrypted",
+      "scenario": "risk: POST {baseUrl}/risk-engine/risk/{eventType}",
+      "clientId": "risk-demo-client",
+      "clientSecret": "s3cr3t-Demo-Key#2026",
+      "clientVersion": "1.0.7",
+      "signInputs": {
+        "sortedSignJson": "{\"amount\":\"1250.75\",\"bankCard\":\"6222600012345678\",\"bizId\":\"PAY202608270001\",\"bizTime\":1756272001500,\"clientId\":\"risk-demo-client\",\"clientVersion\":\"1.0.7\",\"countryCode\":\"SG\",\"deviceModel\":\"iPhone 15 Pro\",\"email\":\"BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LXJUFuISB0gVL01VdqYwNASvfCdIptOUkdzjo1sqm8DVLC4vk=\",\"eventType\":\"payment_risk_check\",\"fingerToken\":\"fp-9f8e7d6c\",\"ip\":\"203.0.113.77\",\"platform\":\"IOS_APP\",\"requestIp\":\"10.20.30.40\",\"requestTime\":1756272001500,\"siteType\":\"default\",\"tenantId\":\"default\",\"traceId\":\"d9428888-1222-4a2b-a97c-91dbcd123456\",\"userId\":\"u_80001\"}",
+        "sha512HexLowerOfSignJson": "07dcace2f84b6c5eb507c4b9cd1814a36ae8d3cc68ff83f30c162a4b0ed1275d41900b6ccc67452b57f9495401badd41aa9c18058ab05d844b3963cb3ce4f95e",
+        "eciesPlaintextNote": "被 ECIES 加密的明文是这 128 个小写 hex 字符本身(US-ASCII)",
+        "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KSYUB/ACZp0lm8jVByY1lInoBfMIZc0dP6H5NLB21lBNOFIz8OzqhIFe1wArEWWfBrs/fR+OM0PceDiqdXsD/p/4FHb3ZHLaRpjwfCdNLmlKAX6OcSThlQxvsPznN/HyTwe6b1TMBefjBy2KxNhQ1JKKU9EsMjM3MSvP4ByqzzvI4TapuXYfIJrhRaFS/cQ9NbrNgY"
+      },
+      "authorizationScheme": "Basic",
+      "authorizationBase64url": "cmlzay1kZW1vLWNsaWVudDpzM2NyM3QtRGVtby1LZXkjMjAyNg==",
+      "riskBasicBase64url": "eyJiaXpJZCI6IlBBWTIwMjYwODI3MDAwMSIsInVzZXJJZCI6InVfODAwMDEiLCJwbGF0Zm9ybSI6IklPU19BUFAiLCJldmVudFR5cGUiOiJwYXltZW50X3Jpc2tfY2hlY2siLCJmaW5nZXJUb2tlbiI6ImZwLTlmOGU3ZDZjIiwiaXAiOiIyMDMuMC4xMTMuNzciLCJiaXpUaW1lIjoxNzU2MjcyMDAxNTAwLCJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJzaXRlVHlwZSI6ImRlZmF1bHQiLCJ0cmFjZUlkIjoiZDk0Mjg4ODgtMTIyMi00YTJiLWE5N2MtOTFkYmNkMTIzNDU2IiwicmVxdWVzdElwIjoiMTAuMjAuMzAuNDAiLCJyZXF1ZXN0VGltZSI6MTc1NjI3MjAwMTUwMCwiY2xpZW50VmVyc2lvbiI6IjEuMC43IiwiY2xpZW50SWQiOiJyaXNrLWRlbW8tY2xpZW50In0=",
+      "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KSYUB/ACZp0lm8jVByY1lInoBfMIZc0dP6H5NLB21lBNOFIz8OzqhIFe1wArEWWfBrs/fR+OM0PceDiqdXsD/p/4FHb3ZHLaRpjwfCdNLmlKAX6OcSThlQxvsPznN/HyTwe6b1TMBefjBy2KxNhQ1JKKU9EsMjM3MSvP4ByqzzvI4TapuXYfIJrhRaFS/cQ9NbrNgY",
+      "headerJson": "{\"bizId\":\"PAY202608270001\",\"userId\":\"u_80001\",\"platform\":\"IOS_APP\",\"eventType\":\"payment_risk_check\",\"fingerToken\":\"fp-9f8e7d6c\",\"ip\":\"203.0.113.77\",\"bizTime\":1756272001500,\"tenantId\":\"default\",\"siteType\":\"default\",\"traceId\":\"d9428888-1222-4a2b-a97c-91dbcd123456\",\"requestIp\":\"10.20.30.40\",\"requestTime\":1756272001500,\"clientVersion\":\"1.0.7\",\"clientId\":\"risk-demo-client\"}",
+      "bodyJson": "{\"amount\":\"1250.75\",\"bankCard\":\"6222600012345678\",\"countryCode\":\"SG\",\"deviceModel\":\"iPhone 15 Pro\",\"email\":\"BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LXJUFuISB0gVL01VdqYwNASvfCdIptOUkdzjo1sqm8DVLC4vk=\"}",
+      "headerJsonNote": "bizData/email 的密文不是 bean 属性 → 不出现在 X-RISK-BASIC,但参与签名并进 body",
+      "strippedHeaderFieldsNote": "Java HEADER_FIELDS 白名单共 14 键(requestTime,traceId,requestIp,clientId,clientVersion,bizId,userId,platform,eventType,fingerToken,ip,bizTime,tenantId,siteType),全剔除后才是 body; 本样例 body 剩 amount/bankCard/countryCode/deviceModel/email 5 键",
+      "secretFieldsUsed": [
+        "email"
+      ],
+      "secretFieldPlaintext": "user@example.com",
+      "secretFieldCipherBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LXJUFuISB0gVL01VdqYwNASvfCdIptOUkdzjo1sqm8DVLC4vk=",
+      "secretFieldEciesNote": "临时标量同样是回放的 EPHE_PATTERN_HEX,所以这条密文也是稳定的(Go 测试可直接断言)",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-RISK-MODE": "sync",
+        "X-SIGNATURE": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KSYUB/ACZp0lm8jVByY1lInoBfMIZc0dP6H5NLB21lBNOFIz8OzqhIFe1wArEWWfBrs/fR+OM0PceDiqdXsD/p/4FHb3ZHLaRpjwfCdNLmlKAX6OcSThlQxvsPznN/HyTwe6b1TMBefjBy2KxNhQ1JKKU9EsMjM3MSvP4ByqzzvI4TapuXYfIJrhRaFS/cQ9NbrNgY",
+        "Authorization": "Basic cmlzay1kZW1vLWNsaWVudDpzM2NyM3QtRGVtby1LZXkjMjAyNg==",
+        "X-RISK-BASIC": "eyJiaXpJZCI6IlBBWTIwMjYwODI3MDAwMSIsInVzZXJJZCI6InVfODAwMDEiLCJwbGF0Zm9ybSI6IklPU19BUFAiLCJldmVudFR5cGUiOiJwYXltZW50X3Jpc2tfY2hlY2siLCJmaW5nZXJUb2tlbiI6ImZwLTlmOGU3ZDZjIiwiaXAiOiIyMDMuMC4xMTMuNzciLCJiaXpUaW1lIjoxNzU2MjcyMDAxNTAwLCJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJzaXRlVHlwZSI6ImRlZmF1bHQiLCJ0cmFjZUlkIjoiZDk0Mjg4ODgtMTIyMi00YTJiLWE5N2MtOTFkYmNkMTIzNDU2IiwicmVxdWVzdElwIjoiMTAuMjAuMzAuNDAiLCJyZXF1ZXN0VGltZSI6MTc1NjI3MjAwMTUwMCwiY2xpZW50VmVyc2lvbiI6IjEuMC43IiwiY2xpZW50SWQiOiJyaXNrLWRlbW8tY2xpZW50In0=",
+        "X-User-Id": "u_80001"
+      }
+    },
+    {
+      "name": "audit_case_query_c_nonascii_bizid",
+      "scenario": "queryAuditCase: POST {baseUrl}/generalCase/query(无路径参数)",
+      "clientId": "test-client-id",
+      "clientSecret": "test-client-secret",
+      "clientVersion": "1.0.7",
+      "signInputs": {
+        "sortedSignJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyb_merchant_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272010000,\"traceId\":\"5d5f4b6f-1111-4bbb-8ccc-92abdc999888\"}",
+        "sha512HexLowerOfSignJson": "3ebdd7fc16cfd56bcd8396c579da70e4c5b59818fd1bbfa5b8e453a44f814681716e91f874d31253321c0a498bede87f8f94db09ad4955f83d1652e2a58f1aab",
+        "eciesPlaintextNote": "被 ECIES 加密的明文是这 128 个小写 hex 字符本身(US-ASCII)",
+        "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KRM0Z4BXJqgw6y2lQgNVpPn9FXNNxe0N+uQsYSAWlhA4bRJDJTxfoTRbEnButDXvY56KPT/7Fha8OA1qdRsTK8/IFIOn8Uff892FXGcdXhxaYSv70WFhhdzqgIy3IjHHOpfKaiGZpecml3jqVN1FNFL6M/HcAiNSNA6qNTnfSnuzbjTd3Wfrb2wXAAAFlVEKDZ2wT0"
+      },
+      "authorizationScheme": "Basic",
+      "authorizationBase64url": "dGVzdC1jbGllbnQtaWQ6dGVzdC1jbGllbnQtc2VjcmV0",
+      "riskBasicBase64url": "eyJiaXpJZCI6IuW6l-mTuuiuouWNlS0yMDI2MDgyNy0wMDA0MiIsInVzZXJJZCI6IlVOS05PV04iLCJldmVudFR5cGUiOiJreWJfbWVyY2hhbnRfY2FzZSIsInRlbmFudElkIjoiZGVmYXVsdCIsInNpdGVUeXBlIjoiZGVmYXVsdCIsInRyYWNlSWQiOiI1ZDVmNGI2Zi0xMTExLTRiYmItOGNjYy05MmFiZGM5OTk4ODgiLCJyZXF1ZXN0SXAiOiIxOTIuMTY4LjEuMTAwIiwicmVxdWVzdFRpbWUiOjE3NTYyNzIwMTAwMDAsImNsaWVudFZlcnNpb24iOiIxLjAuNyIsImNsaWVudElkIjoidGVzdC1jbGllbnQtaWQifQ==",
+      "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KRM0Z4BXJqgw6y2lQgNVpPn9FXNNxe0N+uQsYSAWlhA4bRJDJTxfoTRbEnButDXvY56KPT/7Fha8OA1qdRsTK8/IFIOn8Uff892FXGcdXhxaYSv70WFhhdzqgIy3IjHHOpfKaiGZpecml3jqVN1FNFL6M/HcAiNSNA6qNTnfSnuzbjTd3Wfrb2wXAAAFlVEKDZ2wT0",
+      "headerJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"userId\":\"UNKNOWN\",\"eventType\":\"kyb_merchant_case\",\"tenantId\":\"default\",\"siteType\":\"default\",\"traceId\":\"5d5f4b6f-1111-4bbb-8ccc-92abdc999888\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272010000,\"clientVersion\":\"1.0.7\",\"clientId\":\"test-client-id\"}",
+      "bodyJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"eventType\":\"kyb_merchant_case\"}",
+      "headerJsonNote": "hutool BeanUtil.copyProperties(requestMap, RiskRequestHeader.class) 再经 Jackson 序列化的确切字符串: 父类字段在前子类字段在后、各按声明顺序,null 被省略;userId 是 bean 默认值 UNKNOWN(requestMap 没有 userId)",
+      "noteAboutSignatureScope": "X-SIGNATURE 只覆盖 sortedSignJson(TreeMap 升序 7 键),不含 headerJson/body 的其余键集合",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-RISK-MODE": "sync",
+        "X-SIGNATURE": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KRM0Z4BXJqgw6y2lQgNVpPn9FXNNxe0N+uQsYSAWlhA4bRJDJTxfoTRbEnButDXvY56KPT/7Fha8OA1qdRsTK8/IFIOn8Uff892FXGcdXhxaYSv70WFhhdzqgIy3IjHHOpfKaiGZpecml3jqVN1FNFL6M/HcAiNSNA6qNTnfSnuzbjTd3Wfrb2wXAAAFlVEKDZ2wT0",
+        "Authorization": "Basic dGVzdC1jbGllbnQtaWQ6dGVzdC1jbGllbnQtc2VjcmV0",
+        "X-RISK-BASIC": "eyJiaXpJZCI6IuW6l-mTuuiuouWNlS0yMDI2MDgyNy0wMDA0MiIsInVzZXJJZCI6IlVOS05PV04iLCJldmVudFR5cGUiOiJreWJfbWVyY2hhbnRfY2FzZSIsInRlbmFudElkIjoiZGVmYXVsdCIsInNpdGVUeXBlIjoiZGVmYXVsdCIsInRyYWNlSWQiOiI1ZDVmNGI2Zi0xMTExLTRiYmItOGNjYy05MmFiZGM5OTk4ODgiLCJyZXF1ZXN0SXAiOiIxOTIuMTY4LjEuMTAwIiwicmVxdWVzdFRpbWUiOjE3NTYyNzIwMTAwMDAsImNsaWVudFZlcnNpb24iOiIxLjAuNyIsImNsaWVudElkIjoidGVzdC1jbGllbnQtaWQifQ==",
+        "X-User-Id": "UNKNOWN"
+      }
+    }
+  ]
+}

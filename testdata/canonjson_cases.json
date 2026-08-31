@@ -1,0 +1,128 @@
+{
+  "_meta.title": "canonical JSON 规则 golden 用例(与 Java TreeMap + Jackson 逐字节对齐)",
+  "_meta.generator": "scripts/GenVectors.java(JDK11 + bcprov-jdk15on 1.70,确定性可重跑)",
+  "_meta.notes": [
+    "规则集 R1~R9 见 scripts/README.md(与 design.md『internal/protocol』章节一致)",
+    "canonicalJson 期望值全部是【手工书写的字符串常量】:依据 risk-client 使用的 Jackson 2.13.5 + hutool 5.8.25 的真实行为核对,但生成脚本与 Go 测试都不引入这两个库来计算期望值",
+    "生成脚本内置另一份独立的规则实现(canonical()/orderedJson()),专门反向校对手写常量是否抄错,不一致即失败",
+    "所有样本都是签名输入形态:TreeMap 升序 + Jackson 序列化;不允许再用其它顺序"
+  ],
+  "ruleSummary": {
+    "R1_key_order": "java.util.TreeMap 自然序 = String.compareTo = UTF-16 码元序;嵌套对象递归",
+    "R2_compact": "逗号与冒号后无空格,首尾无缩进无换行",
+    "R3_escapes": "0x22→\\\", 0x5C→\\\\;0x08→\\b、0x09→\\t、0x0A→\\n、0x0C→\\f、0x0D→\\r;其余 <0x20 为 \\u00XX 且 hex 大写",
+    "R4_no_html_escape": "< > & ' / 以及 0x7F、U+2028、U+2029 全部原样",
+    "R5_null_handling": "map/bean 属性值为 null → 键整省略;数组中的 null 元素保留",
+    "R6_integers": "Integer/Long 十进制整数,无小数点",
+    "R7_empty_map": "{}",
+    "R8_no_trailing_newline": "签名字符串不得带尾部换行或空白",
+    "R9_utf8_raw": "非 ASCII 不做 \\uXXXX 转义,原样 UTF-8"
+  },
+  "cases": [
+    {
+      "name": "c01_flat_sorted_keys",
+      "purpose": "三个键乱序放入,期望输出严格按键升序",
+      "inputDescription": "{'event':'login','bizId':'1001','userId':'u_01'}(Java 侧交给 TreeMap 后再序列化)",
+      "canonicalJson": "{\"bizId\":\"1001\",\"event\":\"login\",\"userId\":\"u_01\"}",
+      "note": "普通字符串值无任何额外转义"
+    },
+    {
+      "name": "c02_key_order_is_code_unit_order",
+      "purpose": "大小写敏感,按 UTF-16 码元序:大写在小写之前",
+      "inputDescription": "{'Type':..,'alpha':..,'Alpha':..,'beta':..}",
+      "canonicalJson": "{\"Alpha\":\"A1\",\"Type\":\"T1\",\"alpha\":\"a1\",\"beta\":\"b1\"}",
+      "note": "'A'<'T'<'a'<'b';与 Locale 无关(TreeMap 自然序)"
+    },
+    {
+      "name": "c03_nested_object_recursive_sort",
+      "purpose": "嵌套对象每一层都要升序;数组保持元素原有顺序",
+      "inputDescription": "{'b':{'y':2,'x':{'inner':'v'}},'a':[1,2,3]}",
+      "canonicalJson": "{\"a\":[1,2,3],\"b\":{\"x\":{\"inner\":\"v\"},\"y\":2}}",
+      "note": "递归应用 R1:b 内部也变成 x,y 顺序"
+    },
+    {
+      "name": "c04_html_chars_not_escaped",
+      "purpose": "Jackson 绝不转义 < > &(Go encoding/json 缺省会)",
+      "inputDescription": "value 含 '<script>&amp;</script>' 与 '< > &'",
+      "canonicalJson": "{\"lt_gt_amp\":\"< > &\",\"script\":\"<script>&amp;</script>\"}",
+      "note": "关闭 HTML 转义是最常见的移植翻车点:不同转义直接导致签名不一致"
+    },
+    {
+      "name": "c05_null_properties_omitted",
+      "purpose": "NON_NULL:值为 null 的键整个消失",
+      "inputDescription": "{'a':null,'b':'keep','c':null}",
+      "canonicalJson": "{\"b\":\"keep\"}",
+      "note": "Go 侧等价做法:序列化前删掉 nil 值键"
+    },
+    {
+      "name": "c06_null_element_inside_array_kept",
+      "purpose": "对照面:NON_NULL 只作用于属性,数组内的 null 保留",
+      "inputDescription": "{'list':[null,'keep',null],'gone':null}",
+      "canonicalJson": "{\"list\":[null,\"keep\",null]}",
+      "note": "不要把数组里的 null 也一并删掉"
+    },
+    {
+      "name": "c07_integer_types_stay_integer",
+      "purpose": "Integer/Long 输出整数,无 .0,负数带负号",
+      "inputDescription": "intVal=Integer(42)、longMs=Long(1756272000000)、negInt=-7",
+      "canonicalJson": "{\"intVal\":42,\"longMs\":1756272000000,\"negInt\":-7}",
+      "note": "时间戳一定不能变成浮点数"
+    },
+    {
+      "name": "c08_chinese_utf8_raw_with_ascii_mix",
+      "purpose": "中文原样输出,并且与 ASCII 键混排时按码元序归位",
+      "inputDescription": "{'姓名':'张三','事件类型':'登录','mixed_zh':'中文abc'}",
+      "canonicalJson": "{\"mixed_zh\":\"中文abc\",\"事件类型\":\"登录\",\"姓名\":\"张三\"}",
+      "note": "U+4E8B(事) < U+59D3(姓),都在 ASCII 之后"
+    },
+    {
+      "name": "c09_empty_map",
+      "purpose": "空 map 输出 {},中间没有任何空白",
+      "inputDescription": "{}",
+      "canonicalJson": "{}",
+      "note": "剥完头字段后可能得到空 body"
+    },
+    {
+      "name": "c10_empty_string_key_and_value",
+      "purpose": "空字符串键与值都要保留",
+      "inputDescription": "{'':''}",
+      "canonicalJson": "{\"\":\"\"}",
+      "note": "空串键在排序中恒最小"
+    },
+    {
+      "name": "c11_quotes_and_backslashes",
+      "purpose": "JSON 强制转义依然生效",
+      "inputDescription": "quoted='he said \"hi\"'; bs='C:\\path\\'",
+      "canonicalJson": "{\"bs\":\"C:\\\\path\\\\\",\"quoted\":\"he said \\\"hi\\\"\"}",
+      "note": "只有引号与反斜杠这两类是强制的"
+    },
+    {
+      "name": "c12_control_chars_uppercase_hex_escape",
+      "purpose": "控制字符转义形态:0x08→\\b、0x09→\\t、0x0A→\\n,其余为 \\u00XX 且十六进制字母【大写】",
+      "inputDescription": "值分别为 char 0x01 / 0x0B / 0x1F / 0x08",
+      "canonicalJson": "{\"bell\":\"\\b\",\"nl\":\"\\n\",\"tab\":\"\\t\",\"u0001\":\"\\u0001\",\"u000b\":\"\\u000B\",\"u001f\":\"\\u001F\"}",
+      "note": "关键差异:u000b 输出 '\\u000B' 大写 B!Go 缺省是小写 '\\u000b',这是真实移植坑,Go 侧必须自实现转义器"
+    },
+    {
+      "name": "c13_slash_and_ampersand_raw",
+      "purpose": "/ 和 & 都原样输出",
+      "inputDescription": "url='https://gw/risk?x=1&y=2'",
+      "canonicalJson": "{\"url\":\"https://gw/risk?x=1&y=2\"}",
+      "note": "同样属于 HTML 转义争议面"
+    },
+    {
+      "name": "c14_boolean_and_numeric_string",
+      "purpose": "布尔输出 true/false;数字字符串仍是字符串",
+      "inputDescription": "ok=true、no=false、numStr='123'",
+      "canonicalJson": "{\"no\":false,\"numStr\":\"123\",\"ok\":true}",
+      "note": "数字字符串绝不能掉引号(会改变签名)"
+    },
+    {
+      "name": "c15_supplementary_plane_char_raw",
+      "purpose": "补平面字符(emoji,U+1F600)surrogate pair 原样输出",
+      "inputDescription": "emoji='<U+1F600> ok <U+1F600>'",
+      "canonicalJson": "{\"emoji\":\"😀 ok 😀\",\"plain\":\"hi\"}",
+      "note": "按 UTF-8 编码为 4 字节,Go 行为一致。但增补平面的【键】会踩 UTF-16 码元序 vs 字节序差异,协议约定键只用 ASCII"
+    }
+  ]
+}

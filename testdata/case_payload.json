@@ -1,0 +1,72 @@
+{
+  "_meta.title": "案件查询(generalCase/query)载荷构造对照",
+  "_meta.generator": "scripts/GenVectors.java(JDK11 + bcprov-jdk15on 1.70,确定性可重跑)",
+  "_meta.notes": [
+    "来源:com.ex.risk.client.RiskSimpleClient#queryAuditCase(L149-L191) 逐行读取得到的真实构造链",
+    "签名输入:riskSigner.sign(JsonUtil.toJson(new TreeMap<>(requestMap))),其中 requestMap 先放入 eventType/bizId,再由 DefaultSystemFieldInjector.inject 补入 requestTime(ms,Long)/traceId(UUIDv4)/requestIp/clientId/clientVersion",
+    "HTTP body:JsonUtil.toJson(Map.of(\"eventType\",eventType,\"bizId\",bizId)) —— 键集合只有这两个,与签名输入的键集合不同,绝不能混",
+    "sysFields 是夹具固定值(DefaultSystemFieldInjector 的五个注入键);生产里 requestTime 来自系统时钟、traceId 来自 UUID 随机"
+  ],
+  "samples": [
+    {
+      "name": "query_audit_case_kyc_general_case",
+      "endpoint": "{baseUrl}/generalCase/query",
+      "httpMethod": "POST",
+      "pathParamNote": "案件查询没有路径参数(已砍掉的 withdrawSign 才把 orderId 放路径)",
+      "timeoutSource": "eventTimeout.get(eventType),未配置会在本地预检抛 ClientException",
+      "eventType": "kyc_general_case",
+      "bizId": "GB20260827093000001",
+      "sysFields": {
+        "requestTime": 1756272000000,
+        "requestTimeNote": "毫秒时间戳,类型 Long(序列化不带小数点)",
+        "traceId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "traceIdFormat": "UUIDv4 小写带连字符(DefaultSystemFieldInjector 用 UUID.randomUUID())",
+        "requestIp": "192.168.1.100",
+        "requestIpNote": "Java 启动时抓的首个非环回 IPv4;抓不到则是字符串 UNKNOWN(RiskSimpleClient.getLocalIpAddress)",
+        "clientId": "test-client-id",
+        "clientVersion": "1.0.7"
+      },
+      "sortedSignJson": "{\"bizId\":\"GB20260827093000001\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyc_general_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272000000,\"traceId\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"}",
+      "signJsonExplanation": "TreeMap(HashMap{eventType,bizId} + inject 的五个系统字段) → Jackson 规范 JSON;升序后 7 键:bizId/clientId/clientVersion/eventType/requestIp/requestTime/traceId",
+      "signatureInputs": {
+        "sortedSignJson": "{\"bizId\":\"GB20260827093000001\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyc_general_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272000000,\"traceId\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"}",
+        "sha512HexLowerOfSignJson": "a63df79aa9f7b3ac59891d8a0c08fa2bab06c8f2affbdb21fb6cc4a15984e52a06c9f51c0addca73b4a941c52f10f6fa0e192cff34d51c2f0d7d210a3e50af5d",
+        "eciesPlaintextNote": "被 ECIES 加密的明文是这 128 个小写 hex 字符本身(US-ASCII)",
+        "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76LDYBd4B3I1gV693wUmMw1OyYxXPtQMi4upGJJLUDg2VYSGdjEJxa0ZQrNwBu1HDfI9svCEqbZhbsLf1qIAsjjs+4YdZiAQKqQ6jVWRI4bjxfcU7+cSRk9RxKxcn3EtTXShf66vT5sILTsn3qlJggcbLKM5T8chYHASuq4FzfPzvYY9uy+pRe/zDzVFUoNmQhtOPyqn"
+      },
+      "bodyJson": "{\"bizId\":\"GB20260827093000001\",\"eventType\":\"kyc_general_case\"}",
+      "bodyKeyOrderNote": "Java 用 Map.of(\"eventType\",..,\"bizId\",..)(RiskSimpleClient.java:159)构造 body,迭代序来自 ImmutableCollections.MapN 的哈希散列,属 JDK 实现细节而非协议契约,且随进程 SALT 逐次变化(Zulu 11 跨进程实测两种键序均出现),语义完全等价;golden 固定采用两键升序的规范形态(bizId<eventType 恰为升序),服务端按 JSON 解析任何键序可用",
+      "headerJson": "{\"bizId\":\"GB20260827093000001\",\"userId\":\"UNKNOWN\",\"eventType\":\"kyc_general_case\",\"tenantId\":\"default\",\"siteType\":\"default\",\"traceId\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272000000,\"clientVersion\":\"1.0.7\",\"clientId\":\"test-client-id\"}"
+    },
+    {
+      "name": "query_audit_case_c_nonascii_bizid",
+      "endpoint": "{baseUrl}/generalCase/query",
+      "httpMethod": "POST",
+      "pathParamNote": "同上,无路径参数",
+      "timeoutSource": "eventTimeout.get(eventType)",
+      "eventType": "kyb_merchant_case",
+      "bizId": "店铺订单-20260827-00042",
+      "sysFields": {
+        "requestTime": 1756272010000,
+        "requestTimeNote": "毫秒时间戳,类型 Long(序列化不带小数点)",
+        "traceId": "5d5f4b6f-1111-4bbb-8ccc-92abdc999888",
+        "traceIdFormat": "UUIDv4 小写带连字符(DefaultSystemFieldInjector 用 UUID.randomUUID())",
+        "requestIp": "192.168.1.100",
+        "requestIpNote": "Java 启动时抓的首个非环回 IPv4;抓不到则是字符串 UNKNOWN(RiskSimpleClient.getLocalIpAddress)",
+        "clientId": "test-client-id",
+        "clientVersion": "1.0.7"
+      },
+      "sortedSignJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyb_merchant_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272010000,\"traceId\":\"5d5f4b6f-1111-4bbb-8ccc-92abdc999888\"}",
+      "signJsonExplanation": "第二条样例验证非 ASCII bizId 在签名输入/header/body 三处的 UTF-8 原样行为",
+      "signatureInputs": {
+        "sortedSignJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"clientId\":\"test-client-id\",\"clientVersion\":\"1.0.7\",\"eventType\":\"kyb_merchant_case\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272010000,\"traceId\":\"5d5f4b6f-1111-4bbb-8ccc-92abdc999888\"}",
+        "sha512HexLowerOfSignJson": "3ebdd7fc16cfd56bcd8396c579da70e4c5b59818fd1bbfa5b8e453a44f814681716e91f874d31253321c0a498bede87f8f94db09ad4955f83d1652e2a58f1aab",
+        "eciesPlaintextNote": "被 ECIES 加密的明文是这 128 个小写 hex 字符本身(US-ASCII)",
+        "signatureBase64Std": "BH/k3SrZpkdAbkovllYu1ydj9fIhgPZP3yAFidQJQvRWFb7yiyKxyuyFXOos+jtLkIFRq3x1ylOwL0O1ZAph76KRM0Z4BXJqgw6y2lQgNVpPn9FXNNxe0N+uQsYSAWlhA4bRJDJTxfoTRbEnButDXvY56KPT/7Fha8OA1qdRsTK8/IFIOn8Uff892FXGcdXhxaYSv70WFhhdzqgIy3IjHHOpfKaiGZpecml3jqVN1FNFL6M/HcAiNSNA6qNTnfSnuzbjTd3Wfrb2wXAAAFlVEKDZ2wT0"
+      },
+      "bodyJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"eventType\":\"kyb_merchant_case\"}",
+      "bodyKeyOrderNote": "同上;bizId 含中文时 body/signJson 均按 UTF-8 原样发送",
+      "headerJson": "{\"bizId\":\"店铺订单-20260827-00042\",\"userId\":\"UNKNOWN\",\"eventType\":\"kyb_merchant_case\",\"tenantId\":\"default\",\"siteType\":\"default\",\"traceId\":\"5d5f4b6f-1111-4bbb-8ccc-92abdc999888\",\"requestIp\":\"192.168.1.100\",\"requestTime\":1756272010000,\"clientVersion\":\"1.0.7\",\"clientId\":\"test-client-id\"}"
+    }
+  ]
+}
