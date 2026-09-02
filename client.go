@@ -110,7 +110,7 @@ func (c *Client) Risk(ctx context.Context, p BasicParam, bizData map[string]any,
 
 	bodyBytes, mErr := protocol.Marshal(built.Body)
 	if mErr != nil {
-		return nil, fmt.Errorf("%w: marshal body: %v", protocol.ErrConfig, mErr)
+		return nil, fmt.Errorf("%w: marshal body: %v", protocol.ErrParam, mErr)
 	}
 	urlPath := c.riskURL(p.EventType)
 	headers := protocol.Build(protocol.ModeSync, built.HeaderJSON, built.Signature,
@@ -161,7 +161,7 @@ func (c *Client) QueryAuditCase(ctx context.Context, eventType, bizID string) (*
 
 	bodyBytes, mErr := protocol.Marshal(built.Body)
 	if mErr != nil {
-		return nil, fmt.Errorf("%w: marshal body: %v", protocol.ErrConfig, mErr)
+		return nil, fmt.Errorf("%w: marshal body: %v", protocol.ErrParam, mErr)
 	}
 	urlPath := strings.TrimRight(c.cfg.BaseURL, "/") + c.cfg.CaseQueryPath // 无路径参数(可按网关环境覆盖)
 	headers := protocol.Build(protocol.ModeSync, built.HeaderJSON, built.Signature,
@@ -181,7 +181,7 @@ func (c *Client) QueryAuditCase(ctx context.Context, eventType, bizID string) (*
 		o := protocol.StatusOutcome(status)
 		*resp = CaseResponse[AuditCaseResult]{Success: false, Code: codeToInt(o.Code), Msg: o.Msg}
 	default:
-		got, derr := decodeCaseOutcome[AuditCaseResult](urlPath, raw)
+		got, derr := decodeCaseOutcome(urlPath, raw)
 		if derr != nil {
 			return &CaseResponse[AuditCaseResult]{
 				Code: 500, Msg: fmt.Sprintf("响应处理异常: %v", derr),

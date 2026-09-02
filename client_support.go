@@ -117,9 +117,6 @@ func (c *Client) logResponse(urlPath string, outcome protocol.Outcome, started t
 		urlPath, outcome.Code, time.Since(started).Milliseconds(), outcome.Msg)
 }
 
-// sdklogDetail 显式收口"明细开"的判定点,防止散落布尔直读。
-func sdklogDetail(on bool) bool { return on }
-
 // truncForLog 截断超长报文,防日志膨胀;截断标记随行。
 func truncForLog(b []byte) string {
 	const limit = 4096
@@ -152,7 +149,7 @@ func maskAuthorization(h http.Header) string {
 // decodeCaseOutcome 把案件查询的原始 200 报文装进 CaseResponse:
 // Java handleCommonResultResponse 的三段语义——格式错折叠 500 / 失败 int 码透传 /
 // 成功 data 转 bean(失败转门面文案)。data 不可解码时错误由调用方折成处理异常。
-func decodeCaseOutcome[T AuditCaseResult](urlPath string, raw []byte) (*CaseResponse[T], error) {
+func decodeCaseOutcome(urlPath string, raw []byte) (*CaseResponse[AuditCaseResult], error) {
 	var env struct {
 		Success bool            `json:"success"`
 		Code    json.RawMessage `json:"code"` // 线上实测:数字/字符串两种形态并存,宽进后统一转 int
@@ -160,18 +157,18 @@ func decodeCaseOutcome[T AuditCaseResult](urlPath string, raw []byte) (*CaseResp
 		Data    json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return &CaseResponse[T]{Success: false, Code: 500, Msg: "风控服务响应格式错误"}, nil
+		return &CaseResponse[AuditCaseResult]{Success: false, Code: 500, Msg: "风控服务响应格式错误"}, nil
 	}
 	if !env.Success {
-		return &CaseResponse[T]{Success: false, Code: flexibleToInt(env.Code), Msg: env.Msg}, nil
+		return &CaseResponse[AuditCaseResult]{Success: false, Code: flexibleToInt(env.Code), Msg: env.Msg}, nil
 	}
-	var d T
+	var d AuditCaseResult
 	if len(env.Data) > 0 {
 		if err := json.Unmarshal(env.Data, &d); err != nil {
 			return nil, err // 调用方折叠「响应处理异常」
 		}
 	}
-	return &CaseResponse[T]{Success: true, Code: flexibleToInt(env.Code), Msg: env.Msg, Data: d}, nil
+	return &CaseResponse[AuditCaseResult]{Success: true, Code: flexibleToInt(env.Code), Msg: env.Msg, Data: d}, nil
 }
 
 // stripBase64Whitespace 容忍配置里粘贴的换行/空格。

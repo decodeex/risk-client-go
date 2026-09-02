@@ -1,7 +1,9 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -251,4 +253,47 @@ func sameJSONObject(a, b []byte) bool {
 	aj, _ := json.Marshal(va)
 	bj, _ := json.Marshal(vb)
 	return string(aj) == string(bj)
+}
+
+// TestBuildRiskRequestFreshEphemeralPerCiphertext 生产路径必须对每条密文独立抽临时密钥。
+// 回归点(2026-09-01):此前签名与敏感字段共用一个临时密钥,同一请求的所有密文
+// 落在同一条 XOR keystream 上(流密码密钥复用),两条密文异或即可消去 keystream。
+func TestBuildRiskRequestFreshEphemeralPerCiphertext(t *testing.T) {
+	pub, _ := loadGatewayKeys(t)
+	sgn, err := NewSigner(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := SystemFields{RequestTime: 1756272000000, TraceID: "t-1",
+		ClientID: "c", ClientVersion: "1.0.7", RequestIP: "1.1.1.1"}
+	build := func() *BuiltRequest {
+		got, berr := BuildRiskRequest(RiskParams{BizID: "B", EventType: "login"},
+			map[string]any{"mobile": "13800000000"}, []string{"mobile"}, sgn, sys)
+		if berr != nil {
+			t.Fatalf("装配失败: %v", berr)
+		}
+		return got
+	}
+	b1, b2 := build(), build()
+
+	// 相同输入两次装配:临时密钥每次新抽,签名密文必然不同
+	if b1.Signature == b2.Signature {
+		t.Fatal("两次装配的签名密文相同=临时密钥未刷新")
+	}
+
+	// 同一请求内:签名密文与敏感字段密文的临时公钥 V(前 65B)必须不同
+	sigCT, derr := base64.StdEncoding.DecodeString(b1.Signature)
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	fieldCT, ferr := base64.StdEncoding.DecodeString(js(b1.Body, "mobile"))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if len(sigCT) < ecIESPointSize || len(fieldCT) < ecIESPointSize {
+		t.Fatalf("密文长度异常: sig=%d field=%d", len(sigCT), len(fieldCT))
+	}
+	if bytes.Equal(sigCT[:ecIESPointSize], fieldCT[:ecIESPointSize]) {
+		t.Fatal("签名与敏感字段共用同一临时公钥(同一 keystream),机密性被削弱")
+	}
 }

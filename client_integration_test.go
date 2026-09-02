@@ -132,9 +132,9 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 
 	var captured atomic.Pointer[capturedRequest]
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		cap := &capturedRequest{rawHeader: r.Header.Clone(), path: r.URL.Path}
-		cap.body, _ = io.ReadAll(r.Body)
-		captured.Store(cap)
+		capturedReq := &capturedRequest{rawHeader: r.Header.Clone(), path: r.URL.Path}
+		capturedReq.body, _ = io.ReadAll(r.Body)
+		captured.Store(capturedReq)
 
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"code":"200","msg":"","data":{"riskId":"R-9001","strategy":"accept","data":{"score":7}}}`)
@@ -168,13 +168,13 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 		t.Fatalf("成功往返不符:%+v", resp)
 	}
 
-	cap := captured.Load()
-	if cap == nil {
+	capReq := captured.Load()
+	if capReq == nil {
 		t.Fatal("请求未被捕获")
 	}
 	// ① 路径与六头存在性
-	if cap.path != "/risk-engine/risk/login" {
-		t.Fatalf("路径不符:%s", cap.path)
+	if capReq.path != "/risk-engine/risk/login" {
+		t.Fatalf("路径不符:%s", capReq.path)
 	}
 	wantVals := map[string]string{
 		"Content-Type": "application/json",
@@ -182,12 +182,12 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 		"X-User-Id":    "UNKNOWN",
 	}
 	for k, want := range wantVals {
-		got := firstHeaderValue(t, cap.rawHeader, k)
-		if got != want {
-			t.Fatalf("%s=%q,want %q", k, got, want)
+		val := firstHeaderValue(t, capReq.rawHeader, k)
+		if val != want {
+			t.Fatalf("%s=%q,want %q", k, val, want)
 		}
 	}
-	authVal := firstHeaderValue(t, cap.rawHeader, "Authorization")
+	authVal := firstHeaderValue(t, capReq.rawHeader, "Authorization")
 	wantAuth := "Basic " + base64.URLEncoding.EncodeToString([]byte("it-client:s3cret#2026"))
 	if authVal != wantAuth {
 		t.Fatalf("Authorization 不符:\n got  = %s\n want = %s", authVal, wantAuth)
@@ -195,7 +195,7 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 
 	// ② 网关视角闭环:X-RISK-BASIC 明文 + body + 已知入参重建合并集 → 摘要;
 	//    解密 X-SIGNATURE 与之逐字节比对。
-	riskBasicPlain, err := base64.URLEncoding.DecodeString(firstHeaderValue(t, cap.rawHeader, "X-Risk-Basic"))
+	riskBasicPlain, err := base64.URLEncoding.DecodeString(firstHeaderValue(t, capReq.rawHeader, "X-Risk-Basic"))
 	if err != nil {
 		t.Fatalf("X-RISK-BASIC 应为 URL-safe 可解码:%v", err)
 	}
@@ -204,8 +204,8 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 		t.Fatalf("X-RISK-BASIC 明文应合法 JSON:%s", riskBasicPlain)
 	}
 	var bodyFields map[string]any
-	if json.Unmarshal(cap.body, &bodyFields) != nil {
-		t.Fatalf("body 应合法 JSON:%s", cap.body)
+	if json.Unmarshal(capReq.body, &bodyFields) != nil {
+		t.Fatalf("body 应合法 JSON:%s", capReq.body)
 	}
 
 	rebuild := map[string]any{}
@@ -237,7 +237,7 @@ func TestRiskIntegrationGatewayViewClosedLoop(t *testing.T) {
 	digest := sha512.Sum512(expectedSorted)
 	expectPlain := []byte(hex.EncodeToString(digest[:]))
 
-	sigVal := firstHeaderValue(t, cap.rawHeader, "X-Signature")
+	sigVal := firstHeaderValue(t, capReq.rawHeader, "X-Signature")
 	ct, decErr := base64.StdEncoding.DecodeString(sigVal)
 	if decErr != nil {
 		t.Fatalf("X-SIGNATURE 应为标准 Base64:%v", decErr)

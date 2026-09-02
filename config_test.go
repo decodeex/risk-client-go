@@ -104,10 +104,3 @@ func TestNewDefaultsFillIn(t *testing.T) {
 		t.Fatal("applyDefaults 必须返回副本,不得污染调用方原值")
 	}
 }
-
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToLower(s[:1]) + s[1:]
-}

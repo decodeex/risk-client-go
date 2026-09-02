@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kafka "github.com/segmentio/kafka-go"
@@ -55,13 +57,16 @@ type Consumer struct {
 	newConn connFactory
 	logger  sdklog.Logger
 
-	startMu  sync.Mutex
-	started  bool
-	stopOnce sync.Once
-	stopCh   chan struct{} // 关闭即停止拉取
-	fuseCh   chan struct{} // Stop 后经 GracefulTimeout 关闭:在途批次强收
-	doneCh   chan struct{} // 循环完全退出
-	lastErr  error
+	startMu    sync.Mutex
+	started    bool
+	fetchFails int // 连续 fetch 失败次数(退避指数;成功后清零)
+	stopOnce   sync.Once
+	stopCh     chan struct{} // 关闭即停止拉取
+	fuseCh     chan struct{} // Stop 后经 GracefulTimeout 关闭:在途批次强收
+	doneCh     chan struct{} // 循环完全退出
+	// lastErr 记录启动/重连期致命错误。写方是 run goroutine、读方是 Stop/Run,
+	// 用 atomic.Pointer 消除无同步读写(2026-09-01 review 修复)。
+	lastErr atomic.Pointer[error]
 }
 
 // NewConsumer 校验配置并构造消费者(**零网络**——连接延迟到 Start 的工厂调用,
@@ -85,15 +90,24 @@ func NewConsumer(cfg ConsumerConfig, handler Handler) (*Consumer, error) {
 	}, nil
 }
 
-// Start 以独立 goroutine 启动消费循环并立即返回 nil(已受理);重复调用幂等。
+// Start 建立连接并以独立 goroutine 启动消费循环(立即返回,不阻塞)。
+// 建连失败同步返回 error——让宿主在启动期就看到消费不可用,而不是静默停摆。
+// 重复调用幂等。
 func (c *Consumer) Start(ctx context.Context) error {
 	c.startMu.Lock()
 	defer c.startMu.Unlock()
 	if c.started {
 		return nil
 	}
+	conn, err := c.newConn(c.cfg)
+	if err != nil {
+		lerr := fmt.Errorf("notify: connect brokers: %w", err)
+		c.lastErr.Store(&lerr)
+		sdklog.Errorf(c.logger, "consumer 启动失败: %v", lerr)
+		return lerr
+	}
 	c.started = true
-	go c.run(ctx)
+	go c.run(ctx, conn)
 	return nil
 }
 
@@ -107,7 +121,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 	<-c.doneCh
-	return c.lastErr
+	return c.loadErr()
 }
 
 // Stop 触发优雅停机(Kratos transport.Server 形态:Stop(ctx) error):
@@ -124,7 +138,7 @@ func (c *Consumer) Stop(ctx context.Context) error {
 	case <-c.doneCh:
 	case <-ctx.Done():
 	}
-	return c.lastErr
+	return c.loadErr()
 }
 
 // everStarted 快照"是否 Start 过"(startMu 只护写入侧;此处读一次布尔,
@@ -146,27 +160,59 @@ func (c *Consumer) signalStop() {
 // ---- 轮次数据结构 ----
 
 type roundItem struct {
-	raw       kafka.Message
-	parsed    Notification
-	badJSON   bool
-	skipParse bool
+	raw     kafka.Message
+	parsed  Notification
+	badJSON bool
 }
 
 // ---- 消费主循环 ----
 
-func (c *Consumer) run(parent context.Context) {
+// run 是消费主循环宿主:管理连接生命周期,并对每一轮迭代做顶层 recover——
+// 任何非预期 panic 只会终止本轮并重建连接继续消费,绝不带崩宿主进程(Req 4.4)。
+func (c *Consumer) run(parent context.Context, firstConn *connections) {
 	defer close(c.doneCh)
 
-	conn, cerr := c.newConn(c.cfg)
-	if cerr != nil {
-		c.lastErr = fmt.Errorf("notify: connect brokers: %w", cerr)
-		sdklog.Errorf(c.logger, "consumer 启动失败: %v", c.lastErr)
-		return
+	conn := firstConn
+	for {
+		alive := c.consumeLoop(parent, conn)
+
+		_ = conn.reader.Close()
+		if conn.dlq != nil {
+			_ = conn.dlq.Close()
+		}
+
+		if alive || !c.running(parent) {
+			return // 正常停机(alive=true)或外部取消;alive=false=panic,走重建
+		}
+		// 异常恢复路径:退避后重建连接继续消费(自愈优先于放弃)
+		sdklog.Errorf(c.logger, "consumer loop exited abnormally, reconnecting in 5s")
+		select {
+		case <-time.After(5 * time.Second):
+		case <-parent.Done():
+			return
+		case <-c.stopCh:
+			return
+		}
+		next, cerr := c.newConn(c.cfg)
+		if cerr != nil {
+			rerr := fmt.Errorf("notify: reconnect brokers: %w", cerr)
+			c.lastErr.Store(&rerr)
+			sdklog.Errorf(c.logger, "reconnect 失败,消费终止: %v", rerr)
+			return
+		}
+		conn = next
 	}
-	defer func() { _ = conn.reader.Close() }()
-	if conn.dlq != nil {
-		defer func() { _ = conn.dlq.Close() }()
-	}
+}
+
+// consumeLoop 单连接上的消费循环。返回 false=正常停机;true=本轮因 panic 退出,
+// 需要上层重建连接继续(panic 已在此处 recover 并记录,不会外溢)。
+func (c *Consumer) consumeLoop(parent context.Context, conn *connections) (alive bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			sdklog.Errorf(c.logger, "consumer loop panic(已恢复,宿主进程不受影响): %v\n%s", r, debugStack())
+			alive = false
+		}
+	}()
 
 	handlerCtx := c.newHandlerCtx(parent)
 
@@ -180,6 +226,14 @@ func (c *Consumer) run(parent context.Context) {
 		}
 		c.processRound(handlerCtx, conn, items)
 	}
+	return true
+}
+
+// debugStack 供 panic 日志附带调用栈(截断,防日志膨胀)。
+func debugStack() string {
+	buf := make([]byte, 4096)
+	n := runtime.Stack(buf, false)
+	return string(buf[:n])
 }
 
 // pollBatch 聚批:首条 FetchMessage 阻塞等待(仅受 parent/Stop 取消),
@@ -197,10 +251,15 @@ func (c *Consumer) pollBatch(reader readerAPI, parent context.Context) []roundIt
 		if !c.running(parent) {
 			return nil // 停机:立刻终止取数
 		}
-		sdklog.Errorf(c.logger, "fetch error(退避重试): %v", err)
-		time.Sleep(minDur(c.cfg.RetryInterval, 5*time.Second))
+		c.fetchFails++
+		backoff := minDur(c.cfg.RetryInterval<<uint(minInt(c.fetchFails-1, 5)), 30*time.Second) // 1s,2s,4s…封顶 30s,防日志洪泛
+		sdklog.Errorf(c.logger, "fetch error(退避 %s 后重试): %v", backoff, err)
+		if !c.sleepInterruptible(backoff, parent) {
+			return nil // 退避期间收到停机信号:立即终止,不再睡满退避时长
+		}
 		return []roundItem{}
 	}
+	c.fetchFails = 0
 	items := make([]roundItem, 0, c.cfg.PollMaxRecords)
 	items = append(items, c.wrapFetched(km))
 
@@ -254,7 +313,10 @@ func (c *Consumer) processRound(hctx context.Context, conn *connections, items [
 		for i := range items {
 			msgs[i] = items[i].raw
 		}
-		if err := conn.reader.CommitMessages(context.WithoutCancel(hctx), msgs...); err != nil {
+		commitCtx, ccancel := context.WithTimeout(context.WithoutCancel(hctx), commitTimeout)
+		err := conn.reader.CommitMessages(commitCtx, msgs...)
+		ccancel()
+		if err != nil {
 			// 提交失败不致命:未提交位点会被重新消费;幂等由接入方吸收(design 偏差声明)
 			sdklog.Warnf(c.logger, "commit failed(%s), messages will be redelivered: %v", reason, err)
 		} else if c.debugEnabled() {
@@ -291,17 +353,19 @@ func (c *Consumer) processRound(hctx context.Context, conn *connections, items [
 		rawFailed = append(rawFailed, m.raw)
 	}
 	if conn.dlq != nil {
-		werr := conn.dlq.WriteMessages(context.WithoutCancel(hctx), rawFailed...)
-		if werr == nil {
-			sdklog.Errorf(c.logger, "batch exhausted → DLQ(%s): %v", c.cfg.DLQTopic, lastNonNil(handlerErr))
+		dlqCtx, dcancel := context.WithTimeout(context.WithoutCancel(hctx), commitTimeout)
+		werr := conn.dlq.WriteMessages(dlqCtx, rawFailed...)
+		dcancel()
+		if werr != nil {
+			finalErr = fmt.Errorf("%v; dlq write failed: %v", finalErr.Error(), werr)
+			sdklog.Errorf(c.logger, "%v", finalErr)
 			c.fireOnBatchError(batch, finalErr)
-			commitAll("dlq-done")
+			commitAll("dlq-fail-alert")
 			return
 		}
-		finalErr = fmt.Errorf("%v; dlq write failed: %v", finalErr.Error(), werr)
-		sdklog.Errorf(c.logger, "%v", finalErr)
+		sdklog.Errorf(c.logger, "batch exhausted → DLQ(%s): %v", c.cfg.DLQTopic, lastNonNil(handlerErr))
 		c.fireOnBatchError(batch, finalErr)
-		commitAll("dlq-fail-alert")
+		commitAll("dlq-done")
 		return
 	}
 	sdklog.Errorf(c.logger, "batch exhausted(no DLQ): %v", lastNonNil(handlerErr))
@@ -413,6 +477,36 @@ func mergedDone(dones ...<-chan struct{}) context.Context {
 	return ctx
 }
 
+// loadErr 原子读出启动/重连期致命错误(无则 nil)。
+func (c *Consumer) loadErr() error {
+	if p := c.lastErr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// sleepInterruptible 可被 Stop/外部取消提前唤醒的休眠;返回 false=收到了停机信号。
+// 此前 fetch 退避用裸 time.Sleep,停机信号落在退避窗口内时要白等最多 30s。
+func (c *Consumer) sleepInterruptible(d time.Duration, parent context.Context) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-parent.Done():
+		return false
+	case <-c.stopCh:
+		return false
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func minDur(a, b time.Duration) time.Duration {
 	if a < b {
 		return a
@@ -439,3 +533,7 @@ func (c *Consumer) debugEnabled() bool { return true }
 
 // ErrBatchExhausted 标记批次重试耗尽这一终局形态。
 var ErrBatchExhausted = errors.New("notify: batch exhausted after retries")
+
+// commitTimeout 限定位点提交/死信投递的单次阻塞上限:broker 半死时宁可本次失败
+// (走重投/告警路径),也不无限拖住消费循环。
+const commitTimeout = 10 * time.Second

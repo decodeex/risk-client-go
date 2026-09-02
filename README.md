@@ -66,6 +66,8 @@ cr, _ := cli.QueryAuditCase(ctx, "withdraw", "20260827001")
 
 Option:`WithRequestIP` / `WithLogger`(接宿主日志,默认标准库)/ `WithHTTPClient` / `WithTraceIDFunc`。
 
+**Client 请全局复用(单例)**:并发安全;每 New 一次就是一套独立连接池,按请求新建属反模式。
+
 ## 消费(审核结果通知)
 
 ```go
@@ -89,6 +91,8 @@ app := kratos.New(kratos.Server(gs, hs, consumer))
 - 回调失败:整批重试 `RetryCount×RetryInterval`;耗尽后调 `OnBatchError` 并提交位点继续消费(消息放弃)。要转存死信配 `DLQTopic`,不配则告警即终
 - 位点仅在批次终局(成功/死信/耗尽告警)后提交,中途绝不提交
 - 不构造 Consumer 就没有任何 Kafka 连接
+- 传给 `Start`/`Run` 的 ctx 是消费循环的生命周期父级,请传 Background 或应用级 ctx,勿传短超时的请求 ctx(Kratos 挂 `kratos.Server` 时框架已管好)
+- Stop 之后本实例不支持原地重启(需新建 Consumer);宿主进程重启即恢复
 - 通知可能缺失:以 `QueryAuditCase` 补偿为准,勿依赖通知必达;案件查询路径默认带服务名前缀 `/risk-audit/generalCase/query`
 
 ## 接入注意

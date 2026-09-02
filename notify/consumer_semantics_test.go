@@ -366,6 +366,17 @@ func (s *sharedQueue) push(m kafka.Message) {
 	s.items = append(s.items, m)
 }
 
+func (s *sharedQueue) pop() (kafka.Message, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.items) == 0 {
+		return kafka.Message{}, false
+	}
+	m := s.items[0]
+	s.items = s.items[1:]
+	return m, true
+}
+
 func (s *sharedQueue) newReader() *fakeReader {
 	f := &fakeReader{}
 	f.hijack(func() (kafka.Message, bool) {
@@ -380,3 +391,89 @@ func (s *sharedQueue) newReader() *fakeReader {
 	})
 	return f
 }
+
+// panickyReader:FetchMessage 直接 panic,模拟引擎层非预期异常(验证顶层 recover)。
+type panickyReader struct{ fakeReader }
+
+func (p *panickyReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	panic("boom: unexpected internal error")
+}
+
+// TestConsumeLoopRecoversPanicWithoutKillingProcess:循环内任何 panic 被 recover,
+// 记录后走"重建连接继续消费"路径,宿主进程绝不带崩(Req 4.4 的消费侧兜底)。
+func TestConsumeLoopRecoversPanicWithoutKillingProcess(t *testing.T) {
+	cfg := fastCfg("")
+	cfg.PollTimeout = 50 * time.Millisecond
+	cli := newTestConsumer(t, cfg, func(context.Context, []Notification) error {
+		return nil
+	}, &fakeReader{}, nil)
+	cli.newConn = func(cfg ConsumerConfig) (*connections, error) {
+		return &connections{reader: &panickyReader{fakeReader: fakeReader{}}}, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic 漏出到 consumeLoop 之外:%v", r)
+				}
+			}()
+			c := cli
+			conn, err := c.newConn(c.cfg)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = c.consumeLoop(context.Background(), conn) // 期待:内部 recover,正常返回
+		}()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("consumeLoop 未在预期时间内返回")
+	}
+}
+
+// oncePanickyReader:第一次 Fetch panic(模拟非预期异常),之后交给正常队列。
+type oncePanickyReader struct {
+	fakeReader
+	panicked atomic.Bool
+}
+
+func (p *oncePanickyReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	if p.panicked.CompareAndSwap(false, true) {
+		panic("boom: kafka-go internal surprise")
+	}
+	return p.fakeReader.FetchMessage(ctx)
+}
+
+// TestRunReconnectsAfterPanic:🔴 级回归——panic 后必须重建连接继续消费,
+// 而不是静默停止消费(此前重连条件写反,panic 即消费永久停摆)。
+func TestRunReconnectsAfterPanic(t *testing.T) {
+	shared := &sharedQueue{}
+	shared.push(msg(notifJSON("after-reconnect", "accept")))
+
+	var got atomic.Int32
+	cli := newTestConsumer(t, fastCfg(""), func(_ context.Context, b []Notification) error {
+		got.Add(int32(len(b)))
+		return nil
+	}, nil, nil)
+	reader := &oncePanickyReader{fakeReader: fakeReader{}}
+	reader.hijack(shared.pop) // 首连 panic;重连后的同一 reader 从共享队列取消息
+	cli.newConn = func(cfg ConsumerConfig) (*connections, error) {
+		return &connections{reader: reader}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); _ = cli.Run(ctx) }()
+
+	waitFor(t, 8*time.Second, func() bool { return got.Load() >= 1 }, "panic 后重连并消费到消息")
+	cancel()
+	<-runDone
+}
+
+// sharedQueue.push/pop 供分摊测试与重连测试共用。

@@ -97,25 +97,41 @@ func validateSecretFields(bizData map[string]any, secretFields []string) error {
 	return nil
 }
 
-// BuildRiskRequest 以随机 ephemeral 执行完整装配(生产入口)。
+// BuildRiskRequest 执行完整装配(生产入口)。
 // sgn 持有的公钥同时用于敏感字段加密——"签名密钥==加密密钥"不变量由此保证。
+//
+// 安全要点(2026-09-01 review 修复):生产路径对每条密文独立抽新临时密钥,
+// 对齐 Java 侧行为(每次 eccEncrypt 都是新 Cipher,BC 每个 doFinal 内部自取新临时对)。
+// 此前实现让签名与全部敏感字段共用一个临时密钥,同一请求的所有密文落在同一条
+// XOR keystream 上(等价流密码密钥复用):拿到两条密文异或即可消去 keystream,
+// 敏感字段机密性被显著削弱。兼容性不受影响——服务端按密文各自独立解密。
 func BuildRiskRequest(p RiskParams, bizData map[string]any, secretFields []string, sgn *Signer,
 	sys SystemFields) (*BuiltRequest, error) {
 
 	if sgn == nil || sgn.pub == nil {
 		return nil, fmt.Errorf("%w: signer with gateway public key is required", ErrConfigAlias)
 	}
-	eph, err := ecdh.P256().GenerateKey(cryptorand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("%w: random ephemeral key: %v", errPipeline, err)
-	}
-	return buildRiskWithEphemeral(p, bizData, secretFields, sgn, eph, sys)
+	return buildRiskCore(p, bizData, secretFields, sgn, sys,
+		func(pt []byte) ([]byte, error) { return Encrypt(sgn.PublicKey(), pt) },
+		sgn.Signature)
 }
 
-// buildRiskWithEphemeral 是装配核心,临时私钥可注入(供 golden 复现 Java 固定回放密文)。
-// 步骤即本文件头注释的五段;任何一步失败都不产生部分产物。
+// buildRiskWithEphemeral 仅供 golden 回放:注入的单个临时密钥贯穿全链,
+// 逐字节复现 Java 侧"固定 SecureRandom ephemeral 回放"的密文。生产入口是 BuildRiskRequest。
 func buildRiskWithEphemeral(p RiskParams, bizData map[string]any, secretFields []string,
 	sgn *Signer, eph *ecdh.PrivateKey, sys SystemFields) (*BuiltRequest, error) {
+
+	return buildRiskCore(p, bizData, secretFields, sgn, sys,
+		func(pt []byte) ([]byte, error) { return EncryptWithEphemeral(sgn.PublicKey(), pt, eph) },
+		func(sorted string) (string, error) { return sgn.signatureWithEphemeral(sorted, eph) })
+}
+
+// buildRiskCore 是装配核心,加密/签名原语注入(生产=每密文新临时密钥;golden=固定回放)。
+// 步骤即本文件头注释的五段;任何一步失败都不产生部分产物。
+func buildRiskCore(p RiskParams, bizData map[string]any, secretFields []string,
+	sgn *Signer, sys SystemFields,
+	encryptSecret func(pt []byte) ([]byte, error),
+	signSorted func(sortedJSON string) (string, error)) (*BuiltRequest, error) {
 
 	if bizData == nil {
 		bizData = map[string]any{}
@@ -138,12 +154,13 @@ func buildRiskWithEphemeral(p RiskParams, bizData map[string]any, secretFields [
 	putBasicParamKeys(merged, eff)
 
 	// ③ 敏感字段逐个加密:值转字符串 → ECIES → 标准 Base64,原位置换(Req 1.2)。
+	// 加密原语由调用方注入:生产路径每条密文独立抽临时密钥(防 keystream 复用)。
 	for _, name := range secretFields {
 		s, convErr := secretToString(bizData[name])
 		if convErr != nil {
 			return nil, convErr
 		}
-		ct, encErr := EncryptWithEphemeral(sgn.PublicKey(), []byte(s), eph)
+		ct, encErr := encryptSecret([]byte(s))
 		if encErr != nil {
 			return nil, fmt.Errorf("%w: encrypt secret %q: %v", errPipeline, name, encErr)
 		}
@@ -162,7 +179,7 @@ func buildRiskWithEphemeral(p RiskParams, bizData map[string]any, secretFields [
 		return nil, fmt.Errorf("%w: canonical marshal: %v", errPipeline, mjErr)
 	}
 
-	signature, sigErr := sgn.signatureWithEphemeral(string(sorted), eph)
+	signature, sigErr := signSorted(string(sorted))
 	if sigErr != nil {
 		return nil, sigErr
 	}

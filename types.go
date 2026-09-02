@@ -68,6 +68,9 @@ type AuditCaseResult struct {
 
 // UnmarshalJSON 兼容 auditTime 的数值与字符串两种形态(个别历史环境曾以字符串下发;
 // 宽进严出:内部形态恒为 int64 毫秒)。
+// 实现要点:直接形态失败后,先把字符串 auditTime 规整为数值再整体重解析——
+// 不能对原始报文直接重解析,否则会在同一字段上以同样原因再次失败,
+// 导致字符串兼容实际不生效(2026-09-01 review 修复)。
 func (a *AuditCaseResult) UnmarshalJSON(data []byte) error {
 	type alias AuditCaseResult // 规避递归
 	var direct alias
@@ -79,18 +82,20 @@ func (a *AuditCaseResult) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &soft); err != nil {
 		return fmt.Errorf("riskclient: decode audit case: %w", err)
 	}
-	if err := json.Unmarshal(data, (*alias)(a)); err != nil {
-		return err // 非 auditTime 字段的真问题照常上抛
-	}
 	if raw, ok := soft["auditTime"]; ok {
 		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
+		if json.Unmarshal(raw, &s) == nil {
 			v, perr := strconv.ParseInt(s, 10, 64)
 			if perr != nil {
 				return fmt.Errorf("riskclient: auditTime 字符串不可解析为毫秒时间戳: %w", perr)
 			}
-			a.AuditTime = v
+			soft["auditTime"] = strconv.AppendInt(nil, v, 10) // 规整为数值形态
+			fixed, merr := json.Marshal(soft)
+			if merr != nil {
+				return fmt.Errorf("riskclient: decode audit case: %w", merr)
+			}
+			return json.Unmarshal(fixed, (*alias)(a))
 		}
 	}
-	return nil
+	return json.Unmarshal(data, (*alias)(a)) // 非 auditTime 字段的真问题照常上抛
 }
