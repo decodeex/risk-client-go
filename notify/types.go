@@ -88,19 +88,8 @@ type Handler func(ctx context.Context, batch []Notification) error
 // 但仍归属本批位点集合——不会出现"被过滤消息卡死消费"的形态。
 type Filter func(n Notification) bool
 
-// OnBatchError 在批次终局失败时被调用(重试耗尽,无论是否已投递死信),
+// OnBatchError 在批次终局失败时被调用(重试耗尽),
 // 用于宿主接告警通道(如 Lark)。参数为业务批次与最终错误;可为 nil(仅日志)。
+// 需要留存失败批次(落日志/库/自建转存)也在此自行处理——SDK 不内置死信投递。
+// batchErr 可用 errors.Is(err, ErrBatchExhausted) 判「重试耗尽」这一形态。
 type OnBatchError func(batch []Notification, batchErr error)
-
-// BatchError 把一批消息与最终错误打包,便于 OnBatchError 使用方组装告警文案。
-type BatchError struct {
-	Batch []Notification
-	Err   error
-}
-
-func (e *BatchError) Error() string {
-	if len(e.Batch) == 1 {
-		return fmt.Sprintf("notify: batch of 1 message failed: %v", e.Err)
-	}
-	return fmt.Sprintf("notify: batch of %d messages failed: %v", len(e.Batch), e.Err)
-}

@@ -39,7 +39,7 @@ func TestConfigValidateMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PollMaxRecords != 10 || got.RetryCount != 50 || got.RetryInterval.String() != "1s" ||
+	if got.PollMaxRecords != 10 || got.RetryCount != 3 || got.RetryInterval.String() != "1s" ||
 		got.GracefulTimeout != 10*1e9 || got.Logger == nil {
 		t.Fatalf("默认值落位不符:%+v", got)
 	}
@@ -74,7 +74,7 @@ func TestNormalAndSkipCommit(t *testing.T) {
 		gmu sync.Mutex
 		got []string
 	)
-	cfg := fastCfg("")
+	cfg := fastCfg()
 	cfg.Filter = func(n Notification) bool { return !strings.HasPrefix(n.BizID, "skip") }
 	cli := newTestConsumer(t, cfg, func(_ context.Context, b []Notification) error {
 		gmu.Lock()
@@ -85,7 +85,7 @@ func TestNormalAndSkipCommit(t *testing.T) {
 		gmu.Unlock()
 		_ = n
 		return nil
-	}, r, nil)
+	}, r)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -115,12 +115,12 @@ func TestNormalAndSkipCommit(t *testing.T) {
 func TestRetryRecoverThenCommit(t *testing.T) {
 	r := &fakeReader{queue: []kafka.Message{msg(notifJSON("r-1", "reject"))}}
 	var attempts atomic.Int32
-	cli := newTestConsumer(t, fastCfg(""), func(_ context.Context, _ []Notification) error {
+	cli := newTestConsumer(t, fastCfg(), func(_ context.Context, _ []Notification) error {
 		if attempts.Add(1) < 3 {
 			return errors.New("transient")
 		}
 		return nil
-	}, r, nil)
+	}, r)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -136,58 +136,9 @@ func TestRetryRecoverThenCommit(t *testing.T) {
 	}
 }
 
-// TestExhaustedWithDLQThenContinue:耗尽→写死信→告警→提交→继续下一批(req 7.4)。
-func TestExhaustedWithDLQThenContinue(t *testing.T) {
-	r := &fakeReader{queue: []kafka.Message{
-		msg(notifJSON("dlq-batch", "reject")),
-		msg(notifJSON("after-dlq", "accept")), // 死信后的新批次必须继续被处理
-	}}
-	dlq := &fakeWriter{}
-	var amu sync.Mutex
-	var alertMsg string
-	var alerts atomic.Int32
-	cfg := fastCfg("RISK_DLQ_TEST")
-	cfg.PollMaxRecords = 1 // 单条/轮:耗尽只含毒消息,后续消息单独成批继续消费
-	cli := newTestConsumer(t, cfg,
-		func(_ context.Context, b []Notification) error {
-			if b[0].BizID == "dlq-batch" {
-				return errors.New("poison message")
-			}
-			amu.Lock()
-			alertMsg += "|" + b[0].BizID
-			amu.Unlock()
-			return nil
-		}, r, dlq)
-
-	cli.cfg.OnBatchError = func(_ []Notification, err error) {
-		alerts.Add(1)
-		_ = err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		waitFor(t, 3*time.Second, func() bool {
-			return alerts.Load() > 0 && alertSnapshot(&amu, &alertMsg) != ""
-		}, "死信+后续处理")
-		cancel()
-	}()
-	if err := cli.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if dlq.size() != 1 || alerts.Load() != 1 {
-		t.Fatalf("死信应收到 1 条、告警 1 次:dlq=%d alerts=%d", dlq.size(), alerts.Load())
-	}
-	if got := alertSnapshot(&amu, &alertMsg); got != "|after-dlq" {
-		t.Fatalf("死信后继续消费失败:%q", alertMsg)
-	}
-	_, _, committed := r.stats()
-	if committed != 2 {
-		t.Fatalf("两批位点都应提交:%d", committed)
-	}
-}
-
-// TestExhaustedNoDLQAlertOnly:无 DLQ 时耗尽=告警+照常提交+继续(req 7.5)。
-func TestExhaustedNoDLQAlertOnly(t *testing.T) {
+// TestExhaustedAlertOnly:耗尽=告警+照常提交+继续(req 7.4/7.5)。
+// SDK 不内置死信:失败批次由宿主在 OnBatchError 里自行转存,恢复靠案件查询补偿。
+func TestExhaustedAlertOnly(t *testing.T) {
 	r := &fakeReader{queue: []kafka.Message{
 		msg(notifJSON("bad", "reject")),
 		msg(notifJSON("good-after", "accept")),
@@ -196,14 +147,14 @@ func TestExhaustedNoDLQAlertOnly(t *testing.T) {
 	var doneOnce sync.Once
 	done := make(chan struct{})
 	firstFailDone := false
-	cli := newTestConsumer(t, fastCfg(""), func(_ context.Context, b []Notification) error {
+	cli := newTestConsumer(t, fastCfg(), func(_ context.Context, b []Notification) error {
 		if b[0].BizID == "bad" {
 			firstFailDone = true
 			doneOnce.Do(func() { close(done) })
 			return errors.New("boom")
 		}
 		return nil
-	}, r, nil)
+	}, r)
 	cli.cfg.OnBatchError = func(_ []Notification, err error) {
 		alerts++
 		if !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "batch exhausted") {
@@ -236,12 +187,12 @@ func TestGracefulStopCompletesInFlight(t *testing.T) {
 		msg(notifJSON("never-seen", "accept")), // Stop 后不应再被消费
 	}}
 	handlerDone := make(chan struct{})
-	cfg := fastCfg("")
+	cfg := fastCfg()
 	cfg.PollMaxRecords = 1 // 每轮恰好一条,保证"在途=第一条、Stop 挡住第二条"
 	cli := newTestConsumer(t, cfg, func(_ context.Context, b []Notification) error {
 		<-handlerDone // 人为拖住在途批次,等 Stop 先发生
 		return nil
-	}, r, nil)
+	}, r)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -281,9 +232,9 @@ func TestGracefulStopCompletesInFlight(t *testing.T) {
 // TestZeroConnectionBeforeStart:req 7.10 —— 构造零连接;Start 触发工厂才建立。
 func TestZeroConnectionBeforeStart(t *testing.T) {
 	var connected atomic.Int32
-	cli := newTestConsumer(t, fastCfg(""), func(context.Context, []Notification) error {
+	cli := newTestConsumer(t, fastCfg(), func(context.Context, []Notification) error {
 		return nil
-	}, &fakeReader{}, nil)
+	}, &fakeReader{})
 	cli.newConn = func(cfg ConsumerConfig) (*connections, error) {
 		connected.Add(1)
 		return &connections{reader: &fakeReader{blockMode: true}}, nil
@@ -323,7 +274,7 @@ func TestTwoConsumersShareLoad(t *testing.T) {
 	}
 	factory := func() *Consumer {
 		reader := shared.newReader()
-		c := newTestConsumer(t, fastCfg(""), makeHandler(), reader, nil)
+		c := newTestConsumer(t, fastCfg(), makeHandler(), reader)
 		return c
 	}
 	c1, c2 := factory(), factory()
@@ -402,11 +353,11 @@ func (p *panickyReader) FetchMessage(ctx context.Context) (kafka.Message, error)
 // TestConsumeLoopRecoversPanicWithoutKillingProcess:循环内任何 panic 被 recover,
 // 记录后走"重建连接继续消费"路径,宿主进程绝不带崩(Req 4.4 的消费侧兜底)。
 func TestConsumeLoopRecoversPanicWithoutKillingProcess(t *testing.T) {
-	cfg := fastCfg("")
+	cfg := fastCfg()
 	cfg.PollTimeout = 50 * time.Millisecond
 	cli := newTestConsumer(t, cfg, func(context.Context, []Notification) error {
 		return nil
-	}, &fakeReader{}, nil)
+	}, &fakeReader{})
 	cli.newConn = func(cfg ConsumerConfig) (*connections, error) {
 		return &connections{reader: &panickyReader{fakeReader: fakeReader{}}}, nil
 	}
@@ -457,10 +408,10 @@ func TestRunReconnectsAfterPanic(t *testing.T) {
 	shared.push(msg(notifJSON("after-reconnect", "accept")))
 
 	var got atomic.Int32
-	cli := newTestConsumer(t, fastCfg(""), func(_ context.Context, b []Notification) error {
+	cli := newTestConsumer(t, fastCfg(), func(_ context.Context, b []Notification) error {
 		got.Add(int32(len(b)))
 		return nil
-	}, nil, nil)
+	}, nil)
 	reader := &oncePanickyReader{fakeReader: fakeReader{}}
 	reader.hijack(shared.pop) // 首连 panic;重连后的同一 reader 从共享队列取消息
 	cli.newConn = func(cfg ConsumerConfig) (*connections, error) {

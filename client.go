@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decodeex/bifu-risk-sdk/internal/protocol"
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/internal/protocol"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // Client 是两项网关调用的唯一门面(同步问询 Risk / 审核案件查询 QueryAuditCase)。

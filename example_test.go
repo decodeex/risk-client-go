@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	riskclient "github.com/decodeex/bifu-risk-sdk"
+	riskclient "github.com/decodeex/risk-client-go"
 )
 
 // demoPublicKey 从 golden 向量取网关公钥(SPKI Base64 形态;真实接入用风控平台下发的公钥)。

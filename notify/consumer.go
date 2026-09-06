@@ -12,7 +12,7 @@ import (
 
 	kafka "github.com/segmentio/kafka-go"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // 本文件实现审核通知的消费全生命周期(design.md System Flows·通知消费):
@@ -21,7 +21,7 @@ import (
 //	  → 坏 JSON 记日志跳过(仍在提交集)/ Filter 拒绝不入 Handler(仍在提交集)
 //	  → Handler 成功 → 提交本批全部位点
 //	  → 失败按 RetryCount×RetryInterval 重试;恢复则提交
-//	  → 耗尽:配了 DLQ 先投死信再提交;未配 OnBatchError 告警后提交,继续消费
+//	  → 耗尽:OnBatchError 告警后提交,继续消费(消息放弃,转存由宿主在回调里自理)
 //
 // 位点只在终局态提交,失败中途绝不提交(Kafka 重投兜底);空匹配集同样提交整轮位点。
 // Stop 立刻停拉取;在途批次允许在 GracefulTimeout 内自然完成,超时熔断强制收尾。
@@ -34,16 +34,9 @@ type readerAPI interface {
 	Close() error
 }
 
-// writerAPI 是死信生产所需的最小 broker 面;kafka.Writer 天然满足。
-type writerAPI interface {
-	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
-	Close() error
-}
-
 // connections 是运行期持有的连接束。
 type connections struct {
 	reader readerAPI
-	dlq    writerAPI // 未配 DLQ 时为 nil
 }
 
 // connFactory 建立 broker 连接的工厂(测试注入假实现;生产为默认工厂)。
@@ -177,9 +170,6 @@ func (c *Consumer) run(parent context.Context, firstConn *connections) {
 		alive := c.consumeLoop(parent, conn)
 
 		_ = conn.reader.Close()
-		if conn.dlq != nil {
-			_ = conn.dlq.Close()
-		}
 
 		if alive || !c.running(parent) {
 			return // 正常停机(alive=true)或外部取消;alive=false=panic,走重建
@@ -204,8 +194,8 @@ func (c *Consumer) run(parent context.Context, firstConn *connections) {
 	}
 }
 
-// consumeLoop 单连接上的消费循环。返回 false=正常停机;true=本轮因 panic 退出,
-// 需要上层重建连接继续(panic 已在此处 recover 并记录,不会外溢)。
+// consumeLoop 单连接上的消费循环。返回 true=循环正常退出(停机/外部取消,上层直接返回);
+// false=本轮因 panic 退出(已在此处 recover 并记录,不会外溢),上层退避后重建连接继续。
 func (c *Consumer) consumeLoop(parent context.Context, conn *connections) (alive bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -348,27 +338,7 @@ func (c *Consumer) processRound(hctx context.Context, conn *connections, items [
 
 	// ---- 重试耗尽 ----
 	finalErr := fmt.Errorf("%w: %v", ErrBatchExhausted, lastNonNil(handlerErr))
-	rawFailed := make([]kafka.Message, 0, len(matched))
-	for _, m := range matched {
-		rawFailed = append(rawFailed, m.raw)
-	}
-	if conn.dlq != nil {
-		dlqCtx, dcancel := context.WithTimeout(context.WithoutCancel(hctx), commitTimeout)
-		werr := conn.dlq.WriteMessages(dlqCtx, rawFailed...)
-		dcancel()
-		if werr != nil {
-			finalErr = fmt.Errorf("%v; dlq write failed: %v", finalErr.Error(), werr)
-			sdklog.Errorf(c.logger, "%v", finalErr)
-			c.fireOnBatchError(batch, finalErr)
-			commitAll("dlq-fail-alert")
-			return
-		}
-		sdklog.Errorf(c.logger, "batch exhausted → DLQ(%s): %v", c.cfg.DLQTopic, lastNonNil(handlerErr))
-		c.fireOnBatchError(batch, finalErr)
-		commitAll("dlq-done")
-		return
-	}
-	sdklog.Errorf(c.logger, "batch exhausted(no DLQ): %v", lastNonNil(handlerErr))
+	sdklog.Errorf(c.logger, "batch exhausted: %v", lastNonNil(handlerErr))
 	c.fireOnBatchError(batch, finalErr)
 	commitAll("exhausted-alert")
 }
@@ -534,6 +504,6 @@ func (c *Consumer) debugEnabled() bool { return true }
 // ErrBatchExhausted 标记批次重试耗尽这一终局形态。
 var ErrBatchExhausted = errors.New("notify: batch exhausted after retries")
 
-// commitTimeout 限定位点提交/死信投递的单次阻塞上限:broker 半死时宁可本次失败
+// commitTimeout 限定位点提交的单次阻塞上限:broker 半死时宁可本次失败
 // (走重投/告警路径),也不无限拖住消费循环。
 const commitTimeout = 10 * time.Second

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decodeex/bifu-risk-sdk/internal/protocol"
+	"github.com/decodeex/risk-client-go/internal/protocol"
 )
 
 // Config 是创建客户端的全部静态配置(Req 6.1)。零配置文件依赖:结构由宿主的

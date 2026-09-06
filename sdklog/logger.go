@@ -26,7 +26,7 @@ type Logger interface {
 	Infof(format string, args ...any)
 	// Warnf 记录不影响调用结果但值得关注的异常路径。
 	Warnf(format string, args ...any)
-	// Errorf 记录失败路径（远端错误码、重试耗尽、死信投递等）。
+	// Errorf 记录失败路径（远端错误码、重试耗尽等）。
 	Errorf(format string, args ...any)
 }
 

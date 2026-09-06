@@ -26,6 +26,12 @@ import (
 // (宁可显式失败影响一次调用,也不允许静默生成错误签名的报文)。
 var ErrUnsupportedValue = errors.New("protocol: value cannot be represented as canonical json")
 
+// maxCanonDepth 是嵌套深度上限:循环引用的 map/slice 会让自实现递归无出口,
+// 而栈溢出无法被 recover,会直接带崩宿主进程(标准库 json.Marshal 对环报错,
+// 这里必须提供同等强度的保护)。超限按 ErrUnsupportedValue 显式失败一次调用,
+// 与「宁可显式失败,不静默生成错误签名」的既定口径一致;100 层对风控报文绰绰有余。
+const maxCanonDepth = 100
+
 // Marshal 按 R1~R9 将 m 序列化为规范 JSON 字节:键升序、嵌套递归、紧凑分隔、
 // 无 HTML 转义、省略 null 属性、非 ASCII 原样 UTF-8(R9)、无尾随换行或空白(R8)。
 //
@@ -33,7 +39,7 @@ var ErrUnsupportedValue = errors.New("protocol: value cannot be represented as c
 // m 为 nil 时按空对象处理(输出 "{}",对应 R7 —— 剥离头字段后可能得到空 body)。
 func Marshal(m map[string]any) ([]byte, error) {
 	e := &canonEncoder{}
-	e.writeMap(m)
+	e.writeMap(m, 1)
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -55,7 +61,12 @@ func (e *canonEncoder) fail(err error) {
 }
 
 // writeMap 写出一个 JSON 对象。属性值为 null(untyped nil)的键整个省略(R5)。
-func (e *canonEncoder) writeMap(m map[string]any) {
+// depth 为当前嵌套层级,超过 maxCanonDepth 即判失败(防循环引用栈溢出)。
+func (e *canonEncoder) writeMap(m map[string]any, depth int) {
+	if depth > maxCanonDepth {
+		e.fail(fmt.Errorf("%w: nesting deeper than %d levels (循环引用?)", ErrUnsupportedValue, maxCanonDepth))
+		return
+	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -76,7 +87,7 @@ func (e *canonEncoder) writeMap(m map[string]any) {
 		first = false
 		e.writeString(k)
 		e.buf = append(e.buf, ':')
-		e.writeValue(v)
+		e.writeValue(v, depth)
 	}
 	e.buf = append(e.buf, '}')
 }
@@ -84,7 +95,7 @@ func (e *canonEncoder) writeMap(m map[string]any) {
 // writeValue 写单个值。支持的类型集合是协议实际会用到的超集:
 // string / bool / nil / int 族 / uint 族 / json.Number / float64 /
 // json.RawMessage / json.Marshaler 兜底 / map[string]any / []any。
-func (e *canonEncoder) writeValue(v any) {
+func (e *canonEncoder) writeValue(v any, depth int) {
 	switch val := v.(type) {
 	case nil: // 仅数组元素会走到这里(map 属性已在 writeMap 里整键省略)
 		e.buf = append(e.buf, "null"...)
@@ -133,14 +144,18 @@ func (e *canonEncoder) writeValue(v any) {
 		}
 		e.buf = append(e.buf, raw...)
 	case map[string]any:
-		e.writeMap(val)
+		e.writeMap(val, depth+1)
 	case []any:
+		if depth+1 > maxCanonDepth { // 数组支路的深度同样封顶(防 slice 环)
+			e.fail(fmt.Errorf("%w: nesting deeper than %d levels (循环引用?)", ErrUnsupportedValue, maxCanonDepth))
+			return
+		}
 		e.buf = append(e.buf, '[')
 		for i, item := range val {
 			if i > 0 {
 				e.buf = append(e.buf, ',') // R2:紧凑分隔
 			}
-			e.writeValue(item) // 数组内的 null 元素保留(R5 对照面),由 case nil 落地
+			e.writeValue(item, depth+1) // 数组内的 null 元素保留(R5 对照面),由 case nil 落地
 		}
 		e.buf = append(e.buf, ']')
 	default:

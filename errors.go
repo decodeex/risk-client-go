@@ -1,6 +1,6 @@
 package riskclient
 
-import "github.com/decodeex/bifu-risk-sdk/internal/protocol"
+import "github.com/decodeex/risk-client-go/internal/protocol"
 
 // 本文件是 SDK 双轨错误契约中的 “本地 error” 轨公开面:
 //

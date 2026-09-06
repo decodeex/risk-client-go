@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // memLogger 收集全部输出行,供开关语义断言;编译期锁定 sdklog.Logger 接口契约。

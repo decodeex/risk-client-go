@@ -1,9 +1,9 @@
-// Package riskclient 是风控网关的 Go 客户端(bifu-risk-sdk),提供三类能力:
+// Package riskclient 是风控网关的 Go 客户端(risk-client-go),提供三类能力:
 //
 //  1. 同步风控问询 Client.Risk —— 与 Java 版 risk-client 1.0.7 协议逐字节兼容
 //     (BC 1.70 默认参数 ECIES 签名链、六头构造、敏感字段加密),同一网关与凭证可混用;
 //  2. 审核案件查询 Client.QueryAuditCase —— 上游补偿任务用;
-//  3. Kafka 审核结果通知消费 bifu-risk-sdk/notify —— 批量/过滤/重试/死信/优雅停机,
+//  3. Kafka 审核结果通知消费 risk-client-go/notify —— 批量/过滤/重试/优雅停机,
 //     Start/Stop 兼容 Kratos transport.Server。
 //
 // # 快速接入

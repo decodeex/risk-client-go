@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // ErrInvalidConfig 是 notify 包的配置哨兵(errors.Is 可判)。
@@ -23,9 +23,8 @@ type ConsumerConfig struct {
 
 	PollMaxRecords int           `json:"poll_max_records" yaml:"poll_max_records"` // 默认 10
 	PollTimeout    time.Duration `json:"poll_timeout" yaml:"poll_timeout"`         // 聚批窗口,默认 1s
-	RetryCount     int           `json:"retry_count" yaml:"retry_count"`           // 默认 50(对齐 Java)
+	RetryCount     int           `json:"retry_count" yaml:"retry_count"`           // 默认 3
 	RetryInterval  time.Duration `json:"retry_interval" yaml:"retry_interval"`     // 默认 1s
-	DLQTopic       string        `json:"dlq_topic" yaml:"dlq_topic"`               // 空=不投递死信
 
 	Filter       Filter        `json:"-"`
 	OnBatchError OnBatchError  `json:"-"`
@@ -87,7 +86,7 @@ func (c ConsumerConfig) Validate() (ConsumerConfig, error) {
 		c.PollTimeout = time.Second
 	}
 	if c.RetryCount <= 0 {
-		c.RetryCount = 50
+		c.RetryCount = 3
 	}
 	if c.RetryInterval <= 0 {
 		c.RetryInterval = time.Second

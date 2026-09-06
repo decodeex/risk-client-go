@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // hostLogAdapter 模拟接入方（宿主服务）自带日志设施的一行适配桥，

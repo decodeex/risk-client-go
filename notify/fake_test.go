@@ -2,14 +2,13 @@ package notify
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	kafka "github.com/segmentio/kafka-go"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // ---------------------------------------------------------------------------
@@ -106,29 +105,6 @@ func (f *fakeReader) stats() (fetches, closeCnt int, committed int) {
 	return f.fetches, f.closeCnt, committed
 }
 
-type fakeWriter struct {
-	mu     sync.Mutex
-	msgs   []kafka.Message
-	failN  int // 前 N 次写失败(验证回落告警路径)
-	writes int
-}
-
-func (w *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.writes++; w.failN >= w.writes {
-		return errors.New("forced dlq failure")
-	}
-	w.msgs = append(w.msgs, msgs...)
-	return nil
-}
-func (w *fakeWriter) Close() error { return nil }
-func (w *fakeWriter) size() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return len(w.msgs)
-}
-
 // msg 快捷构造。
 func msg(val string) kafka.Message {
 	return kafka.Message{Topic: "RISK_AUDIT_RESULT_NOTIFY", Partition: 0,
@@ -140,8 +116,7 @@ func notifJSON(bizID string, result string) string {
 }
 
 // newTestConsumer 构造注入了假连接的消费器(覆盖工厂字段是同包测试特权)。
-func newTestConsumer(t *testing.T, cfg ConsumerConfig, h Handler,
-	reader *fakeReader, dlq *fakeWriter) *Consumer {
+func newTestConsumer(t *testing.T, cfg ConsumerConfig, h Handler, reader *fakeReader) *Consumer {
 	t.Helper()
 	validated, verr := cfg.Validate()
 	if verr != nil {
@@ -155,17 +130,13 @@ func newTestConsumer(t *testing.T, cfg ConsumerConfig, h Handler,
 		doneCh: make(chan struct{}),
 	}
 	c.newConn = func(cc ConsumerConfig) (*connections, error) {
-		conn := &connections{reader: reader}
-		if cc.DLQTopic != "" && dlq != nil {
-			conn.dlq = dlq
-		}
-		return conn, nil
+		return &connections{reader: reader}, nil
 	}
 	return c
 }
 
 // fastCfg 快节奏配置:窗口/重试都毫秒级,方便测试在秒内收敛。
-func fastCfg(dlqTopic string) ConsumerConfig {
+func fastCfg() ConsumerConfig {
 	return ConsumerConfig{
 		Brokers:         []string{"127.0.0.1:9092"},
 		GroupID:         "it-" + time.Now().Format("150405"),
@@ -174,7 +145,6 @@ func fastCfg(dlqTopic string) ConsumerConfig {
 		PollTimeout:     60 * time.Millisecond,
 		RetryCount:      3,
 		RetryInterval:   15 * time.Millisecond,
-		DLQTopic:        dlqTopic,
 		GracefulTimeout: 1500 * time.Millisecond,
 		StartOffset:     OffsetEarliest,
 	}
@@ -193,12 +163,4 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string)
 	t.Fatalf("等待超时:%s", what)
 }
 
-var _ writerAPI = (*fakeWriter)(nil)
 var _ readerAPI = (*fakeReader)(nil)
-
-// alertSnapshot 在互斥下读告警文案(测试用小助手)。
-func alertSnapshot(mu *sync.Mutex, s *string) string {
-	mu.Lock()
-	defer mu.Unlock()
-	return *s
-}

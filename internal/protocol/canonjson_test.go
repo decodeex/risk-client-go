@@ -405,3 +405,53 @@ func TestNestedMapNilsOmittedButArrayNilsKept(t *testing.T) {
 		t.Fatalf("嵌套层也要省略 null 属性而保留数组 null:\n got  = %s\n want = %s", got, want)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 稳定性:循环引用/超深嵌套必须显式失败,而不是栈溢出带崩宿主进程
+// (栈溢出无法 recover;标准库 json.Marshal 对环返回 error,本序列化器须同强度)。
+
+func TestMarshalCyclicMapFailsNotCrash(t *testing.T) {
+	m := map[string]any{}
+	m["self"] = m // map 环
+	_, err := Marshal(m)
+	if !errors.Is(err, ErrUnsupportedValue) {
+		t.Fatalf("cyclic map: want ErrUnsupportedValue, got %v", err)
+	}
+
+	s := []any{nil}
+	s[0] = s // slice 环
+	_, err = Marshal(map[string]any{"a": s})
+	if !errors.Is(err, ErrUnsupportedValue) {
+		t.Fatalf("cyclic slice: want ErrUnsupportedValue, got %v", err)
+	}
+}
+
+func TestMarshalOverdeepNestingFailsNotCrash(t *testing.T) {
+	root := map[string]any{}
+	cur := root
+	for i := 0; i < maxCanonDepth+50; i++ { // 远超上限,但有限(构造本身不得溢出)
+		next := map[string]any{}
+		cur["n"] = next
+		cur = next
+	}
+	_, err := Marshal(root)
+	if !errors.Is(err, ErrUnsupportedValue) {
+		t.Fatalf("overdeep nesting: want ErrUnsupportedValue, got %v", err)
+	}
+
+	// 恰在上限内的合法深嵌套仍正常序列化(不误伤)
+	ok := map[string]any{}
+	cur = ok
+	for i := 0; i < maxCanonDepth-2; i++ {
+		next := map[string]any{}
+		cur["n"] = next
+		cur = next
+	}
+	out, err := Marshal(ok)
+	if err != nil {
+		t.Fatalf("within-limit nesting should marshal, got %v", err)
+	}
+	if !strings.Contains(string(out), `"n":{"n":`) {
+		t.Fatalf("within-limit nesting output malformed: %.80s", out)
+	}
+}

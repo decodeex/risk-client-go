@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/decodeex/bifu-risk-sdk/internal/protocol"
+	"github.com/decodeex/risk-client-go/internal/protocol"
 )
 
 // ---------------------------------------------------------------------------

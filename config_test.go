@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/decodeex/bifu-risk-sdk/internal/protocol"
+	"github.com/decodeex/risk-client-go/internal/protocol"
 )
 
 // fixturePublicKey 从 golden 的 staticKeyPair 取 SPKI Base64 作为合法公钥夹具。

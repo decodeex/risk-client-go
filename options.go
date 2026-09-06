@@ -3,7 +3,7 @@ package riskclient
 import (
 	"net/http"
 
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // Option 定制 Client 装配行为,均可在 New(Config, opts...) 变参尾部追加。

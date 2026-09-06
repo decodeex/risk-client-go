@@ -1,4 +1,4 @@
-module github.com/decodeex/bifu-risk-sdk
+module github.com/decodeex/risk-client-go
 
 go 1.23.2
 

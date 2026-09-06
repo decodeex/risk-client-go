@@ -258,7 +258,7 @@ func buildHeaderJSON(eff RiskParams, sys SystemFields) (string, error) {
 		first = false
 		e.writeString(key)
 		e.buf = append(e.buf, ':')
-		e.writeValue(v)
+		e.writeValue(v, 1) // 头字段是受控标量集,永不触达深度上限
 	}
 	for _, k := range headerBeanOrder {
 		writeKV(k)

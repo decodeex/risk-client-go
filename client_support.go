@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decodeex/bifu-risk-sdk/internal/protocol"
-	"github.com/decodeex/bifu-risk-sdk/sdklog"
+	"github.com/decodeex/risk-client-go/internal/protocol"
+	"github.com/decodeex/risk-client-go/sdklog"
 )
 
 // 本文件承载 Client 的装配助手:公钥解析 / HTTP 连接池 / 出口 IP 兜底探测 /
