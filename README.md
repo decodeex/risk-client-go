@@ -11,7 +11,7 @@
 
 | 功能 | 版本号 | 修订时间 | 修订人 | 备注 |
 |---|---|---|---|---|
-| 初版 | v0.1.0 | 2026.09.02 | kiwi | 同步风控问询（含敏感字段加密）+ 审核案件查询 + Kafka 审核结果通知消费；已通过真实环境全链路联调 |
+| 初版 | v0.1.1 | 2026.09.10 | kiwi | 同步风控问询（含敏感字段加密）+ 审核案件查询 + Kafka 审核结果通知消费（SDK 验签，伪造/超窗消息拒收）；已通过真实环境全链路联调 |
 
 ---
 
@@ -20,7 +20,7 @@
 ### 1️⃣ 添加依赖
 
 ```bash
-go get github.com/decodeex/risk-client-go@v0.1.0
+go get github.com/decodeex/risk-client-go@v0.1.1
 ```
 
 ### 2️⃣ 构造 Client（全局单例，并发安全）
@@ -147,7 +147,12 @@ cli, err := riskclient.New(riskclient.Config{
     EventTimeoutMs: ac.Risk.EventTimeoutMS,
 }, opts...)
 
+verifier, verr := cli.NotifyVerifier() // 以 Client 的公钥构造通知验签器（必传，缺失 NewConsumer 直接报错）
+if verr != nil {
+    return verr // 公钥配置有问题，启动期暴露
+}
 consumerCfg := notify.ConsumerConfig{
+    Verifier:      verifier,
     Brokers:       splitList(ac.Kafka.Brokers),
     Topics:        splitList(ac.Kafka.Topics),
     GroupID:       ac.Kafka.GroupID,
@@ -207,10 +212,16 @@ if err == nil && resp.IsSuccess() {        // code == "200"
 ```go
 import "github.com/decodeex/risk-client-go/notify"
 
+verifier, err := notify.NewNotifyVerifier("MFkwEwYHKoZI...（与问询同一把公钥）", 5*time.Minute, nil, nil)
+if err != nil {
+    return err // 公钥格式有问题，启动期暴露
+}
+
 consumer, err := notify.NewConsumer(notify.ConsumerConfig{
-    Brokers: []string{"b-1.xxx.kafka.amazonaws.com:9092"},
-    GroupID: "my-service",                        // 每个服务独立，勿与其他服务共用
-    Topics:  []string{"RISK_AUDIT_RESULT_NOTIFY"},
+    Brokers:  []string{"b-1.xxx.kafka.amazonaws.com:9092"},
+    GroupID:  "my-service",                       // 每个服务独立，勿与其他服务共用
+    Topics:   []string{"RISK_AUDIT_RESULT_NOTIFY"},
+    Verifier: verifier,                           // 必传：缺失 NewConsumer 直接报错，验签是 SDK 固定行为
     OnBatchError: func(batch []notify.Notification, err error) {
         // 重试耗尽的终局告警，接 Lark/监控
     },
@@ -226,6 +237,7 @@ consumer, err := notify.NewConsumer(notify.ConsumerConfig{
 
 消费行为要点：
 
+- 通知验签是固定行为：每条消息先验签（ECDSA，公钥与问询同一把、按环境成对领取），伪造签名 / 超出 ±5 分钟窗口 / 无签名的消息直接丢弃并告警，不进业务回调——公钥配错的症状是消费端全部拒收；消息被丢弃不补发，靠案件查询接口兜底；
 - 一批处理完（回调成功，或重试耗尽已告警）才提交位点（位点=消费进度，告诉 Kafka「这批完了」）；失败中途绝不提交，这批会在重启后重新投递——所以回调必须幂等；
 - 回调失败按 `RetryCount(默认3) × RetryInterval(默认1s)` 重试，耗尽后调 `OnBatchError` 告警、提交位点、继续消费；SDK 不内置死信 topic，要留存失败批次就在 `OnBatchError` 里自己落日志/库；
 - 坏 JSON / 被 Filter 过滤的消息记日志跳过，不卡位点；
