@@ -6,7 +6,7 @@ import (
 )
 
 // TestAuditCaseResultAuditTimeTolerance 锁定 auditTime 数值/字符串双形态兼容
-// (个别历史环境曾以字符串下发)。回归点(2026-09-01):回退路径曾对原始报文
+// (个别历史环境曾以字符串下发)。回归点:回退路径曾对原始报文
 // 直接重解析,在同一字段上以同样原因再次失败,字符串兼容实际不生效。
 func TestAuditCaseResultAuditTimeTolerance(t *testing.T) {
 	var num AuditCaseResult

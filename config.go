@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/decodeex/risk-client-go/internal/protocol"
+	"github.com/decodeex/risk-client-go/notify"
 )
 
 // Config 是创建客户端的全部静态配置(Req 6.1)。零配置文件依赖:结构由宿主的
@@ -32,6 +33,13 @@ type Config struct {
 	// LogDetail 明细日志开关(Req 8):true 输出请求/响应报文(Authorization 掩码);
 	// false 只输出无业务内容的调用摘要与错误日志。默认 false。
 	LogDetail bool `json:"log_detail" yaml:"log_detail"`
+	// NotifyToleranceSec 通知验签时间窗秒数,默认 300。
+	NotifyToleranceSec int `json:"notify_tolerance_sec" yaml:"notify_tolerance_sec"`
+	// NotifyVerifyTopics 需要验签的 topic 列表(可多个),默认 ["RISK_AUDIT_RESULT_NOTIFY"];
+	// 消费其他 topic 时不验签直接放行。
+	NotifyVerifyTopics []string `json:"notify_verify_topics" yaml:"notify_verify_topics"`
+	// NonceChecker 可选重放去重回调。
+	NonceChecker notify.NonceChecker `json:"-"`
 	// CaseQueryPath 案件查询路径,默认 "/risk-audit/generalCase/query"(带服务名前缀,
 	// 对齐网关服务名路由约定,与 /risk-engine/risk/** 同规则;Java 历史无前缀路径未经验证)。
 	CaseQueryPath string `json:"case_query_path" yaml:"case_query_path"`
@@ -105,6 +113,9 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.HTTP.MaxIdleConnsPerHost <= 0 {
 		c.HTTP.MaxIdleConnsPerHost = 5
+	}
+	if c.NotifyToleranceSec <= 0 {
+		c.NotifyToleranceSec = 300
 	}
 	return c
 }

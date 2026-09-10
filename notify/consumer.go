@@ -58,7 +58,7 @@ type Consumer struct {
 	fuseCh     chan struct{} // Stop 后经 GracefulTimeout 关闭:在途批次强收
 	doneCh     chan struct{} // 循环完全退出
 	// lastErr 记录启动/重连期致命错误。写方是 run goroutine、读方是 Stop/Run,
-	// 用 atomic.Pointer 消除无同步读写(2026-09-01 review 修复)。
+	// 用 atomic.Pointer 消除无同步读写(review 修复)。
 	lastErr atomic.Pointer[error]
 }
 
@@ -228,7 +228,7 @@ func debugStack() string {
 
 // pollBatch 聚批:首条 FetchMessage 阻塞等待(仅受 parent/Stop 取消),
 // 收到首条后以 PollTimeout 为聚合窗口继续拉至 PollMaxRecords。
-// 设计勘误(联调修正,2026-08-31):原实现给每条 fetch 挂独立窗口,消费组 join
+// 设计勘误(联调修正):原实现给每条 fetch 挂独立窗口,消费组 join
 // 握手会被窗口反复打断,导致组永远注册不上(静默空转);改为"阻塞首条 + 窗口
 // 起算于首条",与 kafka-go 官方消费模式一致。
 // 返回 nil 表示应终止取数(Stop/外部取消);空片=窗口内无后续消息,正常收口。
@@ -278,12 +278,17 @@ func (c *Consumer) wrapFetched(km kafka.Message) roundItem {
 	return item
 }
 
-// collectMatched 组装交给 Handler 的子集(badJSON/Filter 拒绝者不入),
+// collectMatched 组装交给 Handler 的子集(badJSON/验签失败/Filter 拒绝者不入),
 // 但它们仍留在整轮提交集内(req 7.6/7.7)。同一轮的过滤判定日志仅记一次粒度=逐条 Debug。
 func (c *Consumer) matchedOf(items []roundItem) []roundItem {
 	out := make([]roundItem, 0, len(items))
 	for _, it := range items {
 		if it.badJSON {
+			continue
+		}
+		if r := c.cfg.Verifier.VerifyFor(it.raw.Topic, string(it.raw.Value)); r != VerifyPass {
+			sdklog.Warnf(c.logger, "notify verify failed(%s) topic=%s partition=%d offset=%d bizId=%s: dropped",
+				r, it.raw.Topic, it.raw.Partition, it.raw.Offset, it.parsed.BizID)
 			continue
 		}
 		if c.cfg.Filter != nil && !c.cfg.Filter(it.parsed) {

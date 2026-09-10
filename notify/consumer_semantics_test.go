@@ -21,13 +21,15 @@ import (
 
 // TestConfigValidateMatrix 覆盖 4.1 的 Validate 与默认值落位。
 func TestConfigValidateMatrix(t *testing.T) {
-	base := ConsumerConfig{Brokers: []string{"b:9092"}, GroupID: "g", Topics: []string{"t"}}
+	base := ConsumerConfig{Brokers: []string{"b:9092"}, GroupID: "g", Topics: []string{"t"},
+		Verifier: flowVerifier(t)}
 	for name, mutate := range map[string]func(*ConsumerConfig){
-		"缺 brokers": func(c *ConsumerConfig) { c.Brokers = nil },
-		"空 broker":  func(c *ConsumerConfig) { c.Brokers = []string{" "} },
-		"缺 group":   func(c *ConsumerConfig) { c.GroupID = " " },
-		"缺 topics":  func(c *ConsumerConfig) { c.Topics = nil },
-		"坏 sasl":    func(c *ConsumerConfig) { c.SASL.Mechanism = "kerberos" },
+		"缺 brokers":  func(c *ConsumerConfig) { c.Brokers = nil },
+		"空 broker":   func(c *ConsumerConfig) { c.Brokers = []string{" "} },
+		"缺 group":    func(c *ConsumerConfig) { c.GroupID = " " },
+		"缺 topics":   func(c *ConsumerConfig) { c.Topics = nil },
+		"缺 verifier": func(c *ConsumerConfig) { c.Verifier = nil },
+		"坏 sasl":     func(c *ConsumerConfig) { c.SASL.Mechanism = "kerberos" },
 	} {
 		c := base
 		mutate(&c)

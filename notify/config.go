@@ -30,6 +30,11 @@ type ConsumerConfig struct {
 	OnBatchError OnBatchError  `json:"-"`
 	Logger       sdklog.Logger `json:"-"`
 
+	// Verifier 通知验签器(必填):验签 topic 集合内的消息逐条验签,
+	// 失败丢弃并告警;集合外 topic 直接放行。经 NewNotifyVerifier 构造(或
+	// riskclient.Client.NotifyVerifier()),nil 时 NewConsumer 直接报错。
+	Verifier *NotifyVerifier `json:"-" yaml:"-"`
+
 	GracefulTimeout time.Duration `json:"graceful_timeout" yaml:"graceful_timeout"` // Stop 上限,默认 10s
 
 	SASL SASLConfig `json:"sasl" yaml:"sasl"`
@@ -68,6 +73,8 @@ func (c ConsumerConfig) Validate() (ConsumerConfig, error) {
 		return c, fmt.Errorf("%w: group_id is required", ErrInvalidConfig)
 	case len(c.Topics) == 0:
 		return c, fmt.Errorf("%w: topics is empty", ErrInvalidConfig)
+	case c.Verifier == nil:
+		return c, fmt.Errorf("%w: verifier is required", ErrInvalidConfig)
 	}
 	for i := range c.Brokers {
 		if strings.TrimSpace(c.Brokers[i]) == "" {

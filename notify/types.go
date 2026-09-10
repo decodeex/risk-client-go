@@ -10,7 +10,7 @@ import (
 // Notification 是 RISK_AUDIT_RESULT_NOTIFY 的消息结构。
 //
 // 与生产端约定(RiskGeneralCaseServiceImpl.buildAuditNotifyContent /
-// WithdrawCaseServiceImpl,2026-08-26 源码核实):
+// WithdrawCaseServiceImpl 源码核实):
 //   - auditTime 为毫秒时间戳(Long);
 //   - auditResult 取值枚举名 accept/reject;
 //   - 生产端【不含】clientId 字段(Java 客户端模型遗留字段恒为空),Go 不映射;

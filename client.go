@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/decodeex/risk-client-go/internal/protocol"
+	"github.com/decodeex/risk-client-go/notify"
 	"github.com/decodeex/risk-client-go/sdklog"
 )
 
@@ -191,6 +192,15 @@ func (c *Client) QueryAuditCase(ctx context.Context, eventType, bizID string) (*
 	}
 	c.logResponse(urlPath, protocol.Outcome{Code: strconv.Itoa(resp.Code), Msg: resp.Msg}, started)
 	return resp, nil
+}
+
+// NotifyVerifier 以本客户端配置(公钥/验签时间窗/验签 topic 集合/NonceChecker)构造
+// 通知验签器,供 notify.ConsumerConfig.Verifier 注入(必填)。公钥为 M2M 必配项,
+// 未验签的消息按伪造丢弃。
+func (c *Client) NotifyVerifier() (*notify.NotifyVerifier, error) {
+	return notify.NewNotifyVerifier(c.cfg.PublicKey,
+		time.Duration(c.cfg.NotifyToleranceSec)*time.Second,
+		c.cfg.NonceChecker, c.cfg.NotifyVerifyTopics)
 }
 
 // ---- 门面内部件 ----

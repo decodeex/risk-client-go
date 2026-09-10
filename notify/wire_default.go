@@ -32,7 +32,7 @@ func defaultConnFactory(cfg ConsumerConfig) (*connections, error) {
 		dialer.SASLMechanism = &plain.Mechanism{Username: cfg.SASL.User, Password: cfg.SASL.Password}
 	case "scram-sha256":
 		// 构造失败必须显式返回:此前错误被丢弃,机制为 nil 会静默退化成"不带 SASL 连接",
-		// 凭证配错时只在 broker 侧看到莫名其妙的鉴权失败(2026-09-01 review 修复)。
+		// 凭证配错时只在 broker 侧看到莫名其妙的鉴权失败(review 修复)。
 		mech, merr := scram.Mechanism(scram.SHA256, cfg.SASL.User, cfg.SASL.Password)
 		if merr != nil {
 			return nil, fmt.Errorf("notify: sasl scram-sha256: %w", merr)

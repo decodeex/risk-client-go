@@ -70,7 +70,7 @@ type AuditCaseResult struct {
 // 宽进严出:内部形态恒为 int64 毫秒)。
 // 实现要点:直接形态失败后,先把字符串 auditTime 规整为数值再整体重解析——
 // 不能对原始报文直接重解析,否则会在同一字段上以同样原因再次失败,
-// 导致字符串兼容实际不生效(2026-09-01 review 修复)。
+// 导致字符串兼容实际不生效(review 修复)。
 func (a *AuditCaseResult) UnmarshalJSON(data []byte) error {
 	type alias AuditCaseResult // 规避递归
 	var direct alias

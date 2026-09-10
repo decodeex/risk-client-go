@@ -2,6 +2,11 @@ package notify
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"sync"
 	"testing"
 	"time"
@@ -118,6 +123,9 @@ func notifJSON(bizID string, result string) string {
 // newTestConsumer 构造注入了假连接的消费器(覆盖工厂字段是同包测试特权)。
 func newTestConsumer(t *testing.T, cfg ConsumerConfig, h Handler, reader *fakeReader) *Consumer {
 	t.Helper()
+	if cfg.Verifier == nil {
+		cfg.Verifier = flowVerifier(t)
+	}
 	validated, verr := cfg.Validate()
 	if verr != nil {
 		t.Fatal(verr)
@@ -133,6 +141,26 @@ func newTestConsumer(t *testing.T, cfg ConsumerConfig, h Handler, reader *fakeRe
 		return &connections{reader: reader}, nil
 	}
 	return c
+}
+
+// flowVerifier 供消费语义测试满足「验签器必填」契约:验签 topic 集合刻意不含
+// 被测 topic(消息直通),签名行为由 verify_test.go 覆盖,本组只测提交/重试语义。
+func flowVerifier(t *testing.T) *NotifyVerifier {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := NewNotifyVerifier(base64.StdEncoding.EncodeToString(der),
+		time.Minute, nil, []string{"__flow_only__"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }
 
 // fastCfg 快节奏配置:窗口/重试都毫秒级,方便测试在秒内收敛。

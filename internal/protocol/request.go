@@ -100,7 +100,7 @@ func validateSecretFields(bizData map[string]any, secretFields []string) error {
 // BuildRiskRequest 执行完整装配(生产入口)。
 // sgn 持有的公钥同时用于敏感字段加密——"签名密钥==加密密钥"不变量由此保证。
 //
-// 安全要点(2026-09-01 review 修复):生产路径对每条密文独立抽新临时密钥,
+// 安全要点(review 修复):生产路径对每条密文独立抽新临时密钥,
 // 对齐 Java 侧行为(每次 eccEncrypt 都是新 Cipher,BC 每个 doFinal 内部自取新临时对)。
 // 此前实现让签名与全部敏感字段共用一个临时密钥,同一请求的所有密文落在同一条
 // XOR keystream 上(等价流密码密钥复用):拿到两条密文异或即可消去 keystream,

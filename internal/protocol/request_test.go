@@ -256,7 +256,7 @@ func sameJSONObject(a, b []byte) bool {
 }
 
 // TestBuildRiskRequestFreshEphemeralPerCiphertext 生产路径必须对每条密文独立抽临时密钥。
-// 回归点(2026-09-01):此前签名与敏感字段共用一个临时密钥,同一请求的所有密文
+// 回归点:此前签名与敏感字段共用一个临时密钥,同一请求的所有密文
 // 落在同一条 XOR keystream 上(流密码密钥复用),两条密文异或即可消去 keystream。
 func TestBuildRiskRequestFreshEphemeralPerCiphertext(t *testing.T) {
 	pub, _ := loadGatewayKeys(t)
