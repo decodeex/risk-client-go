@@ -409,9 +409,13 @@ func (c *Consumer) running(parent context.Context) bool {
 // newFetchCtx 组装取数上下文:parent / stopCh 任一关闭即取消。
 // (Stop 立刻解除 FetchMessage 阻塞,满足"停机即不再拉新";无 deadline——
 // 聚批窗口自首条消息起算,由 pollBatch 自行计时。)
+// 返回的 cancel 会连带取消 merged:批结束时立即释放 mergedDone 的监听
+// goroutine。v0.1.1 缺陷修复——此前 merged 的 cancel 未交出,goroutine
+// 只能等 stopCh 关闭(=停机)才退出,每批泄漏一个,随消息量单调增长。
 func (c *Consumer) newFetchCtx(parent context.Context) (context.Context, context.CancelFunc) {
-	merged := mergedDone(parent.Done(), c.stopCh)
-	return context.WithCancel(merged)
+	merged, mergeCancel := mergedDone(parent.Done(), c.stopCh)
+	ctx, cancel := context.WithCancel(merged)
+	return ctx, func() { cancel(); mergeCancel() }
 }
 
 // newHandlerCtx 组装回调上下文:不随 parent/Stop 立即取消(在途批次做完),
@@ -433,7 +437,10 @@ func (c *Consumer) newHandlerCtx(parent context.Context) context.Context {
 }
 
 // mergedDone 返回一个在任一输入通道关闭时即关闭的通道(no背景取消语义)。
-func mergedDone(dones ...<-chan struct{}) context.Context {
+// 同时返回 cancel:调用方生命周期结束时调它,让监听 goroutine 从
+// select 的 <-ctx.Done() 分支退出——cancel 不交出则该分支不可达,
+// goroutine 只能等输入通道关闭(v0.1.1 泄漏根因)。
+func mergedDone(dones ...<-chan struct{}) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer cancel()
@@ -449,7 +456,7 @@ func mergedDone(dones ...<-chan struct{}) context.Context {
 			}
 		}
 	}()
-	return ctx
+	return ctx, cancel
 }
 
 // loadErr 原子读出启动/重连期致命错误(无则 nil)。
