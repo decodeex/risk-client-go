@@ -92,7 +92,7 @@ requestTime / traceId / requestIp / clientId / clientVersion / 凭证全部是�
 
 ---
 
-## 三、testdata 四份文件 Schema
+## 三、testdata 文件 Schema 与名单上报接入（3.5）
 
 ### 3.1 ecies_vectors.json
 
@@ -165,6 +165,137 @@ com.ex.risk.client.RiskSimpleClient#queryAuditCase(L149-L191)的真实构造链:
   (Zulu 11 跨进程实测两种键序都出现);服务端按 JSON 解析任何键序等价,golden 固定取升序规范形态;
 * headerJson:X-RISK-BASIC 明文;userId 是 bean 默认值 UNKNOWN(requestMap 里没有 userId,
   hutool BeanUtil.copyProperties 不会覆盖默认值)。
+
+---
+
+### 3.5 名单外部上报接入指南（接入方视角，ReportWatchList）
+
+外部系统把识别到的恶意对象（IP、账号、设备、链上地址等）上报给风控，自动进入黑/白名单并秒级生效，
+到期自动失效。接入方只调 SDK 一个方法，加密、签名、协议头全部由 SDK 内部完成。
+
+#### 前置条件
+
+向风控研发索取三样东西，填进**现有** `Config`（与同步问询 `Risk()` 同一份配置，**零新增配置项**）：
+
+| 配置项 | 说明 |
+|---|---|
+| `BaseURL` | 风控网关地址（http/https 绝对地址） |
+| `ClientID` / `ClientSecret` | 接入方 M2M 凭证（风控侧登记后发放；未登记的 clientId 一律拒绝） |
+| `PublicKey` | 网关公钥（PEM 或 Base64 SPKI），用于加密与签名 |
+
+可写哪些名单类别、对象类型、默认有效期，由风控侧按 clientId 登记配置，接入前与风控研发确认。
+
+#### 方法签名
+
+```go
+func (c *Client) ReportWatchList(ctx context.Context, items []WatchListReport) (*WatchListReportResult, error)
+
+type WatchListReport struct {
+    ObjectType string // 对象类型，如 "ip"；非空。不限类型：账号/设备/地址等名单可承载的值均可
+    ListType   string // "black" | "white"；非空
+    ItemValue  string // 对象值明文；非空。SDK 固定 ECIES 加密后上送，密文参与签名
+    Reason     string // 上报原因，必填非空（审计溯源）；SDK 加密后上送，空白本地预检拒绝
+    TtlMinutes int64  // 建议有效期（分钟），可选；<=0 或不传 = 不提建议，按风控侧默认 TTL
+}
+```
+
+- `items` 不能为空、每条 `Reason` 必填非空（本地预检直接报错，不发请求）。
+- **1→N**：风控侧可为同一 (对象类型, 名单类别) 登记多个目标名单（不同场景引用不同名单），
+  一条上报自动写入全部命中名单，接入方无感知、无需逐名单调用。
+- 有效期语义：**生效 TTL = min(风控侧默认 TTL, 建议时长)**；外部写入一律带限期，不支持永久。
+  默认 TTL 当前为 24 小时（风控侧可按来源/名单类别调整，免发版生效）。
+- 同一对象重复上报 = 续期（只延长不缩短）；已被风控人工禁用的对象再上报不会复活。
+- 单批 items 上限默认 100（风控侧可配），超出整批拒绝。上报为告警级低频调用，勿批量刷量。
+- 固定 10s 超时上限，调用方可用 `ctx` 收紧；不走 `EventTimeoutMs` 事件超时表。
+
+#### 回执与错误语义（单轨契约，与 Risk() 不同）
+
+`error` 涵盖：本地预检失败、网络失败/超时、一切非 200（含网关 401 鉴权失败、429 限流）。
+**HTTP 200 内的逐条 REJECTED 是合法回执，不是 error**——单条被拒不拖累同批其他条目。
+
+```go
+type WatchListReportReceipt struct {
+    ObjectType, ListType, ItemValue string // 身份三字段回显自入参明文（服务端只回 sha512 摘要，不回明文）
+    Result  string // 四态，见下表
+    Message string // REJECTED 时为拒绝原因码
+}
+```
+
+| Result | 含义 | 接入方动作 |
+|---|---|---|
+| `SAVED` | 新写入，已生效 | 正常 |
+| `EXTENDED` | 已存在，有效期已延长 | 正常（重复上报的预期回执） |
+| `EXISTED` | 已存在但未延长（建议时长未更晚/人工禁用不动） | 正常，无需重试 |
+| `REJECTED` | 该条被拒 | 看 `Message` 原因码，修正后再报 |
+
+回执按上报项笼统聚合（1→N 时一条上报写多个名单）：**任一名单写入成功即成功态**
+（取 SAVED>EXTENDED>EXISTED），全部失败才 REJECTED（首个原因码）。能写的写，
+写不进的只落风控侧日志与告警，无整体事务、**不回滚已成功的写入**；
+续期式写入幂等，原样重试无害；逐名单明细在风控侧日志，接入方无需关心。
+
+常见拒绝原因码：`unauthorized`（clientId 未登记/对象类型+名单类别映射缺失）、
+`decrypt_failed`（密文损坏或公钥不配）、`invalid`（reason 空/字段超长等）、`invalid_ttl`（TTL 配置非法）、
+`batch_limit`（整批超上限）、`signature_failed`（验签失败，整批拒）、
+`watch_code_not_found`（风控侧映射指向的名单不存在，找风控研发核对配置）、
+`write_failed`（风控侧写入意外异常如 DB 抖动，原样重试即可）。
+回执条数与入参不符时 SDK 报错（契约违约，宁拒不猜）。
+
+#### 完整示例
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    riskclient "github.com/decodeex/risk-client-go"
+)
+
+func main() {
+    client, err := riskclient.New(riskclient.Config{
+        BaseURL:      "https://<风控网关地址>", // 找风控研发要
+        ClientID:     "<clientId>",
+        ClientSecret: "<clientSecret>",
+        PublicKey:    "<网关公钥>",
+    })
+    if err != nil {
+        log.Fatalf("SDK 初始化失败: %v", err) // 凭证/公钥缺配在这里拦截
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+    defer cancel()
+
+    res, err := client.ReportWatchList(ctx, []riskclient.WatchListReport{
+        {
+            ObjectType: "ip",
+            ListType:   "black",
+            ItemValue:  "203.0.113.66",
+            Reason:     "恶意扫描告警",
+            // TtlMinutes 不传 = 按风控侧默认 TTL（当前 24 小时）
+        },
+    })
+    if err != nil {
+        // 本地预检/网络/超时/401/429 等非 200 都在这里
+        log.Fatalf("上报名单失败: %v", err)
+    }
+    for _, r := range res.Items {
+        fmt.Printf("%s %s -> %s %s\n", r.ListType, r.ItemValue, r.Result, r.Message)
+        if r.Result == riskclient.WatchListResultREJECTED {
+            // 按 Message 原因码处理，勿原样重试
+        }
+    }
+}
+```
+
+#### 门禁向量说明（内部）
+
+原 `testdata/watchlist_report_vectors.json`（嵌套 items 逐字节门禁向量，spec 任务 3.2）
+已于 11-17 删除。`GenVectors.java` 仍会生成该文件——需要重建门禁 KAT 时重跑本脚本即可再生成，
+重建步骤见 `.kiro/specs/watch-list-external-input/tasks.md` 3.2 与 Implementation Notes
+（须按 request.go 的 buildRiskCore 注入模式给 BuildWatchListReportRequest 加重放缝）。
 
 ---
 
