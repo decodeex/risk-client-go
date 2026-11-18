@@ -118,6 +118,17 @@ public class GenVectors {
     static final long REQUEST_TIME_C = 1756272010000L;
     static final String TRACE_ID_C = "5d5f4b6f-1111-4bbb-8ccc-92abdc999888";
 
+    // ---- 夹具 D:名单外部上报(watch-list-external-input design C1/C3,嵌套 items) ----
+    // 上报方是网关这类外部系统(经 M2M clientId 准入),凭证与问询夹具分开;
+    // X-User-Id 恒 UNKNOWN(M2M 无用户语义,Go 侧 ReportWatchList 同口径)。
+    static final String CLIENT_ID_D = "gateway-reporter";
+    static final String CLIENT_SECRET_D = "gw-R3port-Secret#2026";
+    static final long REQUEST_TIME_D = 1756272020000L;
+    static final String TRACE_ID_D = "7f3a9c2e-5d14-4b8e-9a67-2c8d1e0f5a3b"; // UUIDv4 形态
+    static final String REQUEST_IP_D = "10.30.40.50";
+    static final long REQUEST_TIME_D2 = 1756272021500L;
+    static final String TRACE_ID_D2 = "3e6b8d1f-a29c-4f7d-8b5a-1d4e7c9f2a60";
+
     /**
      * 同步问询样例里敏感字段(email)期望密文。首跑时脚本会打印建议值,固化到这里之后,
      * 后续任何人改坏 ECIES 实现都会在此断言爆红(仓库自带回归闸门)。
@@ -610,18 +621,46 @@ public class GenVectors {
         headerEntries.add(headerEntryAudit("audit_case_query_c_nonascii_bizid",
                 CLIENT_ID_A, CLIENT_SECRET_A, SIGN_JSON_CASE_C, HEADER_JSON_CASE_C, BODY_JSON_CASE_C));
 
-        // ---- 4.5 写出四个文件 ----
+        // ---- 4.5 名单外部上报:嵌套 items 向量(watch-list-external-input 任务 3.2 上线门禁) ----
+        List<Map<String, Object>> watchListEntries = new ArrayList<>();
+        watchListEntries.add(watchListReportEntry(
+                "watchlist_report_mixed_items",
+                "三条 items 混合形态:全字段(密文 itemValue+密文 reason+整数 ttlMinutes)/"
+                        + "最小形态(reason 与 ttlMinutes 整键省略)/只有 reason 无 ttlMinutes;"
+                        + "顶层为 items 数组 + 注入五键,嵌套对象逐层升序",
+                REQUEST_TIME_D, TRACE_ID_D, REQUEST_IP_D, CLIENT_ID_D, CLIENT_SECRET_D,
+                Arrays.asList(
+                        obj("objectType", "ip", "listType", "black",
+                                "itemValue", "203.0.113.66",
+                                "reason", "批量撞库登录聚合来源IP(网关侧判定)",
+                                "ttlMinutes", 30L),
+                        obj("objectType", "device", "listType", "black",
+                                "itemValue", "dvc-4f8e7d6c-af12-4cde"),
+                        obj("objectType", "uid", "listType", "white",
+                                "itemValue", "u_90042",
+                                "reason", "高净值客户误杀申诉白名单"))));
+        watchListEntries.add(watchListReportEntry(
+                "watchlist_report_single_item_minimal",
+                "单条最小形态:仅 objectType/listType/itemValue(密文)三键,reason 与 ttlMinutes 均省略;"
+                        + "用于锁定最小嵌套 body 的逐字节形态",
+                REQUEST_TIME_D2, TRACE_ID_D2, REQUEST_IP_D, CLIENT_ID_D, CLIENT_SECRET_D,
+                Arrays.asList(obj("objectType", "ip", "listType", "white",
+                        "itemValue", "198.51.100.7"))));
+
+        // ---- 4.6 写出五个文件 ----
         write(outDir.resolve("ecies_vectors.json"), renderEciesDoc(vectors, kdf2Vectors));
         write(outDir.resolve("canonjson_cases.json"), renderCanonDoc());
         write(outDir.resolve("headers_golden.json"), renderHeadersDoc(headerEntries));
         write(outDir.resolve("case_payload.json"), renderCasePayloadDoc());
+        write(outDir.resolve("watchlist_report_vectors.json"), renderWatchListDoc(watchListEntries));
 
         System.out.println();
-        System.out.println("[OK] 已生成 4 个 golden 文件到 " + outDir.toAbsolutePath());
+        System.out.println("[OK] 已生成 5 个 golden 文件到 " + outDir.toAbsolutePath());
         System.out.println("     ecies_vectors.json  : " + vectors.size() + " 条加密向量 + " + kdf2Vectors.size() + " 条 KDF2 中间值");
         System.out.println("     canonjson_cases.json: 15 条规范 JSON 用例");
         System.out.println("     headers_golden.json : " + headerEntries.size() + " 组六头样例");
         System.out.println("     case_payload.json   : 2 组案件查询载荷对照");
+        System.out.println("     watchlist_report_vectors.json : " + watchListEntries.size() + " 组名单上报嵌套向量(上线门禁)");
     }
 
     // -------------------------------------------------------------------------
@@ -912,6 +951,124 @@ public class GenVectors {
     }
 
     // -------------------------------------------------------------------------
+    // 名单外部上报嵌套向量(watch-list-external-input design C1 硬条件 + 任务 3.2 上线门禁)
+    //
+    // 与问询装配(RiskRequestBuilder)的两处刻意差异,向量必须按"现状"固化:
+    //   ① 签名原文 == 线上发送字节:expectedBodyJson 既是 body 也是签名输入,
+    //     不存在"剥离头字段后二次序列化"的第二条路径;
+    //   ② 服务端验签(basic-common RiskSignVerifier)以 TreeMap(body)∪basic 重排序列化,
+    //     其输出必须逐字节还原 expectedBodyJson——该判据由 basic-common 仓的 KAT 固化,
+    //     前提是 X-RISK-BASIC 五键 ⊆ body 键集且同值(merge 幂等,下方有自检)。
+    // -------------------------------------------------------------------------
+
+    /** 回放 ephemeral 的 ECIES 加密并直接给出标准 Base64(与 Go 侧 EncryptWithEphemeral 对照)。 */
+    private static String replayEciesBase64(PublicKey pub, String plaintext) throws Exception {
+        byte[] ct = jcaEcies(pub, plaintext.getBytes(StandardCharsets.UTF_8),
+                new ReplayRandom(unhex(EPHE_PATTERN_HEX)));
+        return Base64.getEncoder().encodeToString(ct);
+    }
+
+    /** 自检:回放密文必须能被静态私钥解回明文(MAC 通过才算兼容)。 */
+    private static void assertDecryptsTo(String cipherB64, String plaintext, String what) throws Exception {
+        Cipher dec = Cipher.getInstance("ECIES", "BC");
+        dec.init(Cipher.DECRYPT_MODE, loadPrivPkcs8(PRI_PKCS8_BASE64_EXPECTED));
+        byte[] pt = dec.doFinal(Base64.getDecoder().decode(cipherB64));
+        eq(Arrays.equals(pt, plaintext.getBytes(StandardCharsets.UTF_8)), what + " 密文无法用静态私钥解回明文");
+    }
+
+    private static Map<String, Object> watchListReportEntry(String name, String description,
+                                                            long requestTime, String traceId, String requestIp,
+                                                            String clientId, String clientSecret,
+                                                            List<Map<String, Object>> plainItems) throws Exception {
+        PublicKey pub = loadPubSpki(PUB_SPKI_BASE64_EXPECTED);
+
+        // ① 逐条 item:itemValue/reason 原位置换为 ECIES 密文(标准 Base64);
+        //    reason/ttlMinutes 在明文侧缺席 → wire 侧整键不出现(NON_NULL,Go 侧 watchListItemMaps 同规则)
+        List<Map<String, Object>> wireItems = new ArrayList<>();
+        List<Map<String, Object>> cipherRows = new ArrayList<>();
+        for (Map<String, Object> item : plainItems) {
+            String itemValueCipher = replayEciesBase64(pub, (String) item.get("itemValue"));
+            assertDecryptsTo(itemValueCipher, (String) item.get("itemValue"), name + ".itemValue");
+
+            Map<String, Object> wire = new LinkedHashMap<>();
+            wire.put("objectType", item.get("objectType"));
+            wire.put("listType", item.get("listType"));
+            wire.put("itemValue", itemValueCipher);
+
+            Map<String, Object> cipherRow = new LinkedHashMap<>();
+            cipherRow.put("itemValueCipherBase64Std", itemValueCipher);
+            if (item.containsKey("reason")) {
+                String reasonCipher = replayEciesBase64(pub, (String) item.get("reason"));
+                assertDecryptsTo(reasonCipher, (String) item.get("reason"), name + ".reason");
+                wire.put("reason", reasonCipher);
+                cipherRow.put("reasonCipherBase64Std", reasonCipher);
+            }
+            if (item.containsKey("ttlMinutes")) {
+                wire.put("ttlMinutes", item.get("ttlMinutes")); // 整数形态(canonical 走 Long/Integer 十进制)
+            }
+            wireItems.add(wire);
+            cipherRows.add(cipherRow);
+        }
+
+        // ② 合并注入五键 → 规范 JSON。这一份字节既是签名原文也是线上 body(硬条件①)
+        Map<String, Object> merged = new TreeMap<>();
+        merged.put("items", wireItems);
+        merged.put("requestTime", requestTime);
+        merged.put("traceId", traceId);
+        merged.put("clientId", clientId);
+        merged.put("clientVersion", CLIENT_VERSION);
+        merged.put("requestIp", requestIp);
+        String bodyJson = canonical(merged);
+
+        Map<String, Object> si = signatureInputs(bodyJson);
+        String signatureStd = (String) si.get("signatureBase64Std");
+
+        // ③ X-RISK-BASIC 明文:仅五个注入键,bean 序与 Go 侧 watchListHeaderBeanOrder 一致
+        //    (traceId,requestIp,requestTime,clientVersion,clientId),刻意不升序
+        String headerJson = orderedJson(new Object[][]{
+                {"traceId", traceId}, {"requestIp", requestIp}, {"requestTime", requestTime},
+                {"clientVersion", CLIENT_VERSION}, {"clientId", clientId}});
+
+        // 自检:头五键必须 ⊆ body 键集且同值 —— RiskSignVerifier 的 TreeMap.putAll(basic)
+        // 是覆盖语义,若头里出现 body 没有的键,重排输出必然偏离 body 字节(设计①成真的分叉形态)
+        Object[][] headerKv = {
+                {"traceId", traceId}, {"requestIp", requestIp}, {"requestTime", requestTime},
+                {"clientVersion", CLIENT_VERSION}, {"clientId", clientId}};
+        for (Object[] kv : headerKv) {
+            eq(merged.containsKey(kv[0]) && merged.get(kv[0]).equals(kv[1]),
+                    "名单上报头键 " + kv[0] + " 不在 body 键集或与 body 不同值(merge 幂等前提被破坏)");
+        }
+
+        Map<String, Object> e = new LinkedHashMap<>();
+        e.put("name", name);
+        e.put("scenario", "reportWatchList: POST {baseUrl}/risk-watch-list/external/report(嵌套 items 上报形态)");
+        e.put("description", description);
+        e.put("clientId", clientId);
+        e.put("clientSecret", clientSecret);
+        e.put("clientVersion", CLIENT_VERSION);
+        e.put("sysFields", obj("requestTime", requestTime, "traceId", traceId,
+                "requestIp", requestIp, "clientId", clientId, "clientVersion", CLIENT_VERSION));
+        e.put("items", plainItems);                 // 明文输入(Go 测试由此重建上报表)
+        e.put("itemCiphers", cipherRows);           // 回放 ephemeral 下的期望密文(逐字节比对用)
+        e.put("expectedBodyJson", bodyJson);        // 线上 body == 签名原文(canonjson 字节)
+        e.put("bodySha512HexLower", si.get("sha512HexLowerOfSignJson"));
+        e.put("signInputs", si);
+        e.put("authorizationScheme", "Basic");
+        e.put("authorizationBase64url", Base64.getUrlEncoder().encodeToString(
+                (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8)));
+        e.put("riskBasicBase64url", Base64.getUrlEncoder().encodeToString(
+                headerJson.getBytes(StandardCharsets.UTF_8)));
+        e.put("signatureBase64Std", signatureStd);
+        e.put("headerJson", headerJson);
+        e.put("headers", sixHeaders(clientId, clientSecret, headerJson, signatureStd, "UNKNOWN"));
+        e.put("verifierNotes", "Java 侧门禁:JsonUtil.toMap(expectedBodyJson) 与 X-RISK-BASIC 解码 map 合并进 "
+                + "TreeMap(body 先放,basic 覆盖)后 JsonUtil.toJson 的输出必须逐字节等于 expectedBodyJson,"
+                + "且 RiskSignVerifier.verify 以 staticKeyPair.privateKeyPkcs8Base64Std 验签通过;"
+                + "Go 侧门禁:EncryptWithEphemeral 回放密文、Marshal 合并输出、signatureWithEphemeral 三者逐字节等于本文件值");
+        return e;
+    }
+
+    // -------------------------------------------------------------------------
     // 文档组装
     // -------------------------------------------------------------------------
 
@@ -1044,6 +1201,33 @@ public class GenVectors {
         c.put("canonicalJson", canonicalJson);
         c.put("note", extraNote);
         return c;
+    }
+
+    private static String renderWatchListDoc(List<Map<String, Object>> entries) {
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.putAll(metaDoc("名单外部上报嵌套 golden 向量(watch-list-external-input 上线门禁,任务 3.2)", Arrays.asList(
+                "body 形态:{\"items\":[{\"objectType\":..,\"listType\":..,\"itemValue\":<ECIES 密文 Base64>,"
+                        + "\"reason\":<密文,可选>,\"ttlMinutes\":<整数,可选>}]} + 注入五键",
+                "硬条件①:线上 body 即 canonjson 字节(签名原文==发送字节,没有第二条序列化路径),"
+                        + "entries[].expectedBodyJson 就是那串字节",
+                "硬条件②:Java 侧 RiskSignVerifier 以 TreeMap(body)∪basic 重排序列化必须逐字节还原 expectedBodyJson"
+                        + "——该判据固化在 risk-basic-common 仓的 KAT 测试;两侧任一不过不得上线",
+                "X-RISK-BASIC 只含五个注入键且 ⊆body 同值(merge 幂等前提,脚本有自检);X-User-Id 恒 UNKNOWN(M2M)",
+                "itemValue/reason 密文与 X-SIGNATURE 均由 EPHE_PATTERN_HEX 回放 ephemeral 生成(确定性,可直接逐字节比对);"
+                        + "生产路径每条密文独立随机临时密钥(防 keystream 复用),字节不可预测但可解密回读",
+                "静态密钥对与 ecies_vectors.json 同一组;staticKeyPair.privateKeyPkcs8Base64Std 即服务端验签私钥")));
+        doc.put("staticKeyPair", obj(
+                "curve", "secp256r1 / P-256 / prime256v1",
+                "privateKeyScalarHex", D_STATIC_HEX,
+                "publicKeyUncompressedHex", PUB_UNCOMPRESSED_HEX,
+                "publicKeySpkiBase64Std", PUB_SPKI_BASE64_EXPECTED,
+                "privateKeyPkcs8Base64Std", PRI_PKCS8_BASE64_EXPECTED));
+        doc.put("ephemeralReplay", obj(
+                "replayPatternHex", EPHE_PATTERN_HEX,
+                "resultingEphemeralScalarHex", EPHE_PATTERN_HEX,
+                "note", "向量内全部密文(含 X-SIGNATURE)共用该回放临时标量,仅为确定性;生产各自随机"));
+        doc.put("entries", entries);
+        return renderDoc(doc);
     }
 
     private static String renderHeadersDoc(List<Map<String, Object>> entries) {

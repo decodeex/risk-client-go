@@ -19,11 +19,13 @@ import (
 	"github.com/decodeex/risk-client-go/sdklog"
 )
 
-// Client 是两项网关调用的唯一门面(同步问询 Risk / 审核案件查询 QueryAuditCase)。
+// Client 是三项网关调用的唯一门面(同步问询 Risk / 审核案件查询 QueryAuditCase / 名单上报 ReportWatchList)。
 // 并发安全:实例全部字段在 New 后只读;多 goroutine 可共享同一 Client。
-// 双轨错误契约:
+// 双轨错误契约(Risk/QueryAuditCase):
 //   - 本地预检失败(参数 ErrParam / 配置 ErrConfig / 保留字段 ErrReservedField)→ error 非 nil,未发网络;
 //   - 其余一切失败(超时 408 / 传输 500 / 网关状态 / 格式错)→ 结构化结果,error==nil。
+// 例外:ReportWatchList 是单轨——一切非 200(含 429)按 error 返回,HTTP 200 内的逐条
+// REJECTED 是合法回执不是 error(见 watch_list.go)。
 // 任何路径不 panic(Req 4.4)。
 
 // Client 见包注释与各方法文档。
